@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 import os
 
-from app.routers import query, geocode, spatial, vector, pipeline, chat, ingestion
+from app.routers import query, geocode, spatial, vector, pipeline, chat, ingestion, hwsd
 
 load_dotenv()
 
@@ -28,6 +28,7 @@ app.include_router(vector.router, prefix="/api/v1", tags=["Vector"])
 app.include_router(pipeline.router, prefix="/api/v1", tags=["Pipeline"])
 app.include_router(chat.router, prefix="/api/v1", tags=["Chat"])
 app.include_router(ingestion.router, prefix="/api/v1", tags=["Ingestion"])
+app.include_router(hwsd.router, prefix="/api/v1", tags=["HWSD"])
 
 @app.get("/")
 async def root():
@@ -35,15 +36,22 @@ async def root():
 
 @app.get("/health")
 async def health_check():
+    from app.services.llm_service import llm_service
+    from app.services.hwsd_service import hwsd_service
+
+    llm_status = "active" if llm_service.is_available() else "unavailable"
+    hwsd_status = "active" if hwsd_service.is_available() else "unavailable"
+
     return {
         "status": "healthy",
-        "version": "0.8.0",
+        "version": os.getenv("API_VERSION", "0.9.0"),
         "services": {
             "parser": "active",
             "geocoding": "active",
             "database": "active",
             "vector_db": "active",
             "pipeline": "active",
-            "llm": "not_connected_yet"
+            "llm": llm_status,
+            "hwsd": hwsd_status,
         }
     }

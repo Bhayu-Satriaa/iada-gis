@@ -8,6 +8,7 @@ class IntentType(Enum):
     DOCUMENT_SEARCH = "document_search"
     HYBRID = "hybrid"
     INFO = "info"
+    LAND_SUITABILITY = "land_suitability"
     UNKNOWN = "unknown"
 
 @dataclass
@@ -34,14 +35,29 @@ class RegexQueryParser:
 
     # Database Referensi
     CROP_TYPES = {
-        'padi': ['padi', 'beras'],
-        'jagung': ['jagung', 'corn'],
-        'kelapa_sawit': ['sawit', 'kelapa sawit', 'palm oil'],
+        'padi': ['padi', 'beras', 'padi sawah'],
+        'jagung': ['jagung', 'corn', 'maize'],
+        'kelapa_sawit': ['sawit', 'kelapa sawit', 'palm oil', 'palm'],
+        'kedelai': ['kedelai', 'soybean', 'kacang kedelai', 'kacang kede'],
         'kopi': ['kopi', 'coffee', 'arabika', 'robusta'],
         'kakao': ['kakao', 'coklat', 'cocoa'],
         'tebu': ['tebu', 'gula'],
         'sayuran': ['sayur', 'sayuran', 'hortikultura'],
     }
+
+    # Kata kunci yang menandakan query land suitability
+    LAND_SUITABILITY_PATTERNS = [
+        r'\bkesesuaian\b', r'\bkesesuaian lahan\b',
+        r'\bcocok untuk\b', r'\bcocok ditanam\b',
+        r'\blayak tanam\b', r'\blayak untuk\b',
+        r'\bsesuai untuk\b', r'\bsesuai ditanam\b',
+        r'\banalisis tanah\b', r'\bcek tanah\b', r'\bkualitas tanah\b',
+        r'\bskor lahan\b', r'\bpotensi lahan\b',
+        r'\bhwsd\b',
+        r'apakah.*\b(padi|jagung|sawit|kelapa sawit|kedelai)\b.*bisa ditanam',
+        r'apakah.*lahan.*\b(cocok|sesuai|layak)\b',
+        r'\b(ph|tekstur|drainase|karbon organik)\b.*tanah',
+    ]
 
     CATEGORIES = {
         'pertanian': ['pertanian', 'tanaman pangan', 'lahan', 'sawah'],
@@ -96,6 +112,7 @@ class RegexQueryParser:
             query=query_lower
         )
         has_spatial = self._has_spatial_intent(location, query_lower, intent_type)
+        is_land_suitability = intent_type == IntentType.LAND_SUITABILITY.value
 
         return QueryIntent(
             location=location,
@@ -245,6 +262,10 @@ class RegexQueryParser:
         has_crop = crop_type is not None
         has_category = category is not None
 
+        # Land suitability: cek dulu sebelum spatial
+        if self._is_land_suitability_query(query):
+            return IntentType.LAND_SUITABILITY.value
+
         # Spatial dengan lokasi
         if has_location and (has_crop or has_category):
             return IntentType.SPATIAL_SEARCH.value
@@ -269,6 +290,13 @@ class RegexQueryParser:
             return IntentType.DOCUMENT_SEARCH.value
         
         return IntentType.INFO.value
+
+    def _is_land_suitability_query(self, query: str) -> bool:
+        """Deteksi apakah query adalah tentang kesesuaian lahan"""
+        for pattern in self.LAND_SUITABILITY_PATTERNS:
+            if re.search(pattern, query, re.IGNORECASE):
+                return True
+        return False
     
     def _has_spatial_intent(self, location, query, intent_type):
         """Apakah butuh pencarian spatial"""

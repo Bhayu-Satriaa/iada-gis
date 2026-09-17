@@ -5,7 +5,7 @@ import time
 from app.services.database import db_service
 from app.services.chroma_service import chroma_service
 from app.services.geocode_service import geocode_service
-from app.services.query_parser import RegexQueryParser, QueryIntent
+from app.services.query_parser import RegexQueryParser, QueryIntent, IntentType
 from app.services.llm_service import llm_service
 
 @dataclass
@@ -22,6 +22,7 @@ class Pipelineresult:
     processing_time_ms: int = 0
     citations: List[Dict] = field(default_factory=list)
     geo_json: Optional[Dict] = None
+    hwsd_result: Optional[Dict] = None
 
 class RAGPipeline:
     """Pipeline: Query -> parse -> geocode -> search(spatial + vector) -> context"""
@@ -109,10 +110,65 @@ class RAGPipeline:
         vector_results = self.vector_db.search(vector_query, top_k=5)
         print(f"Found: {len(vector_results)} docs")
 
-        # 5) Context
-        context = self._build_context(intent, spatial_results, vector_results)
+        # 5b) HWSD scoring (jika intent land_suitability atau ada koordinat)
+        hwsd_result = None
+        if center_lat and center_lon:
+            is_land_suit = intent.type == IntentType.LAND_SUITABILITY.value
+            has_crop = intent.crop_type in ["padi", "jagung", "kelapa_sawit", "kedelai"]
 
-        # 6) LLM generate
+            if is_land_suit or (has_crop and intent.type != "spatial_search"):
+                try:
+                    from app.services.hwsd_service import hwsd_service
+                    from app.services.hwsd_scoring import scoring_engine, normalize_crop_type
+
+                    print(f"\nHWSD scoring di ({center_lat}, {center_lon})...")
+                    soil = hwsd_service.get_soil_at_point(center_lat, center_lon)
+
+                    if soil:
+                        crop_key = normalize_crop_type(intent.crop_type) if intent.crop_type else None
+                        if crop_key:
+                            scores = [scoring_engine.score(
+                                crop_key, soil.texture, soil.ph_h2o,
+                                soil.drainage, soil.organic_carbon
+                            )]
+                        else:
+                            scores = scoring_engine.score_all_crops(
+                                soil.texture, soil.ph_h2o,
+                                soil.drainage, soil.organic_carbon
+                            )
+
+                        hwsd_result = {
+                            "smu_id": soil.smu_id,
+                            "soil_info": {
+                                "texture": soil.texture_label,
+                                "ph": soil.ph_h2o,
+                                "drainage": soil.drainage_label,
+                                "oc": soil.organic_carbon,
+                                "completeness": soil.data_completeness,
+                            },
+                            "scores": [
+                                {
+                                    "crop": s.crop_name,
+                                    "crop_key": s.crop_key,
+                                    "overall": s.overall.value,
+                                    "label": s.label,
+                                    "emoji": s.emoji,
+                                    "limiting_factors": s.limiting_factors,
+                                    "note": s.note,
+                                }
+                                for s in scores
+                            ]
+                        }
+                        print(f"HWSD scoring selesai: {len(scores)} komoditas")
+                    else:
+                        print("HWSD: tidak ada data tanah untuk koordinat ini")
+                except Exception as e:
+                    print(f"HWSD scoring error (non-critical): {e}")
+
+        # 6) Context
+        context = self._build_context(intent, spatial_results, vector_results, hwsd_result)
+
+        # 7) LLM generate
         print(f"\n Generating Answer....")
         llm_start = time.time() 
         llm_result = await llm_service.generate_answer(context, query)
@@ -135,7 +191,8 @@ class RAGPipeline:
             model_used=llm_result.get("model", "unknown"),
             processing_time_ms=elapsed_ms,
             citations=citations,
-            geo_json=geo_json
+            geo_json=geo_json,
+            hwsd_result=hwsd_result
         )
 
     def _match_layer_type(self, location: str) -> Optional[str]:
@@ -226,7 +283,7 @@ class RAGPipeline:
 
         return citations
 
-    def _build_context(self, intent: QueryIntent, spatial: List[Dict], vector: List[Dict]) -> str:
+    def _build_context(self, intent: QueryIntent, spatial: List[Dict], vector: List[Dict], hwsd_result: Optional[Dict] = None) -> str:
         lines = []
         lines.append("=" * 50)
         lines.append(f"Query: {intent.raw_query}")
@@ -251,6 +308,24 @@ class RAGPipeline:
             source = meta.get('source_type', '?') if isinstance(meta, dict) else '?'
             content = d.get('content', '') if isinstance(d, dict) else str(d)
             lines.append(f"- [{source}] {str(content)[:500]}...")
+
+        # Inject HWSD result ke context
+        if hwsd_result:
+            lines.append(f"\n--- Analisis Kesesuaian Lahan HWSD ---")
+            soil = hwsd_result.get("soil_info", {})
+            lines.append(f"Data Tanah (SMU ID: {hwsd_result.get('smu_id')})")
+            lines.append(f"  Tekstur  : {soil.get('texture', 'N/A')}")
+            lines.append(f"  pH       : {soil.get('ph', 'N/A')}")
+            lines.append(f"  Drainase : {soil.get('drainage', 'N/A')}")
+            lines.append(f"  Org. Carbon: {soil.get('oc', 'N/A')}%")
+            lines.append("")
+            lines.append("Hasil Scoring Kesesuaian Lahan:")
+            for s in hwsd_result.get("scores", []):
+                lines.append(f"  {s['emoji']} {s['crop']}: {s['label']} ({s['overall']})")
+                if s.get('limiting_factors'):
+                    lines.append(f"     Faktor pembatas: {', '.join(s['limiting_factors'])}")
+                if s.get('note'):
+                    lines.append(f"     Catatan: {s['note']}")
 
         return "\n".join(lines)
     

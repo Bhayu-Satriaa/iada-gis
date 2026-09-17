@@ -1,13 +1,13 @@
-﻿# 📋 IADA-GIS — Project Summary (AI Reference)
+# 📋 IADA-GIS — Project Summary (AI Reference)
 
 > **Dokumen ini adalah acuan untuk AI** agar dapat memahami progress, arsitektur, dan status implementasi project IADA-GIS secara akurat.
-> Diperbarui terakhir: 2026-08-14
+> Diperbarui terakhir: 2026-09-15
 
 ---
 
 ## 🧭 Gambaran Umum
 
-**IADA-GIS** (Intelligent Agriculture Data Assistant — Geographic Information System) adalah aplikasi asisten pertanian berbasis AI untuk wilayah **Kalimantan Timur**. Pengguna bisa bertanya dalam Bahasa Indonesia tentang pertanian, dan sistem akan menjawab dengan data spasial (peta), data dokumen, dan jawaban natural language dari LLM.
+**IADA-GIS** (Intelligent Agriculture Data Assistant — Geographic Information System) adalah aplikasi asisten pertanian berbasis AI untuk wilayah **Kalimantan Timur**. Pengguna bisa bertanya dalam Bahasa Indonesia tentang pertanian, dan sistem akan menjawab dengan data spasial (peta), data dokumen, dan analisis kesesuaian lahan (HWSD), beserta jawaban natural language dari LLM.
 
 **Target pengguna:** Petani, penyuluh pertanian, dan instansi dinas pertanian di Kaltim.
 
@@ -15,32 +15,29 @@
 
 ## 🏗️ Arsitektur Sistem
 
-```
+```text
 Flutter App (Android/Web)
         │  HTTP (Dio)
         ▼
 FastAPI Backend (Python)
         │
-   ┌────┴────┐
-   ▼         ▼
-PostGIS   ChromaDB
-(Spatial)  (Vector/RAG)
-        │
-        ▼
-  Google Gemini LLM
+    ┌───┼────────────────┬──────────────┐
+    ▼   ▼                ▼              ▼
+PostGIS ChromaDB        HWSD           LLM
+(Map)   (Vector/RAG)    (SQLite cache) (Gemini)
 ```
 
 ### Alur Query Utama:
 1. User ketik pertanyaan di chat Flutter
 2. Frontend kirim ke `POST /api/v1/chat`
-3. Backend: **Query Parser** (regex NLP) → ekstrak intent, lokasi, jenis tanaman, radius
+3. Backend: **Query Parser** (regex NLP) → ekstrak intent (tanya peta, kesesuaian lahan, info dokumen), lokasi, jenis tanaman, radius
 4. **Geocoding** via Nominatim (OSM) + fallback hardcoded Kaltim
-5. **Spatial Search** di PostGIS (radius-based, filter kategori)
-6. **GIS Layer Query** → ambil polygon dari tabel `gis_layers` → serialize ke GeoJSON
-7. **Vector Search** di ChromaDB (semantic search dokumen)
-8. **LLM** (Gemini) generate jawaban dari context gabungan
+5. **Spatial Search** di PostGIS (radius-based, filter kategori) → geojson polygon
+6. **Vector Search** di ChromaDB (semantic search dokumen)
+7. **HWSD Scoring** (Jika intent kesesuaian lahan): Cek koordinat ke HWSD raster → ambil data tanah dari SQLite cache → Rule-based scoring untuk komoditas (S1/S2/S3/N)
+8. **LLM** (Gemini) generate jawaban dari context gabungan (GIS + Documents + HWSD)
 9. Response JSON dikirim balik ke Flutter
-10. Flutter tampilkan chat bubble + peta (bottom sheet) jika ada GeoJSON
+10. Flutter tampilkan chat bubble + peta (jika ada geojson) + HWSD card (jika ada hasil kesesuaian lahan)
 
 ---
 
@@ -52,8 +49,9 @@ PostGIS   ChromaDB
 | Web Framework | FastAPI + Uvicorn | ✅ Running |
 | Database Spatial | PostgreSQL 15 + PostGIS 3.3 | ✅ Connected |
 | Vector DB | ChromaDB (persistent) | ✅ Running |
+| Land Suitability (HWSD) | Rasterio + SQLite (cache) / MDB fallback | ✅ Active |
 | Embedding Model | paraphrase-multilingual-MiniLM-L12-v2 | ✅ Active |
-| LLM | Google Gemini (via google-genai) | ⚠️ Terintegrasi (health check hardcoded) |
+| LLM | Google Gemini (via google-genai) | ✅ Active |
 | Geocoding | Nominatim OSM + fallback hardcoded | ✅ Active |
 | GIS Processing | GeoPandas, Shapely | ✅ Active |
 | Document Loader | LangChain + PyPDF + OpenPyXL | ✅ Active |
@@ -144,7 +142,7 @@ iada_gis/
 
 | Fitur | File | Keterangan |
 |---|---|---|
-| FastAPI setup + CORS | main.py | 7 router terdaftar |
+| FastAPI setup + CORS | main.py | 8 router terdaftar, /health check valid |
 | Query Parser NLP | query_parser.py | Regex: intent, lokasi, tanaman, radius, kategori |
 | Geocoding | geocode_service.py | Nominatim + 20+ kota Kaltim hardcoded |
 | Spatial Search (PostGIS) | database.py | search_places_radius() |
@@ -152,9 +150,10 @@ iada_gis/
 | Vector DB (ChromaDB) | chroma_service.py | Embedding + semantic search |
 | Multi-format Document Loader | document_loader.py | PDF, SHP, CSV, XLSX, XLS |
 | Batch Ingest | batch_ingest.py + ingestion.py | Ingest semua file di /data |
-| RAG Pipeline Orchestrator | pipeline_service.py | Parse → Geocode → Spatial → GIS → Vector → LLM |
+| RAG Pipeline Orchestrator | pipeline_service.py | Parse → Geocode → Spatial → GIS → Vector → LLM + HWSD |
 | LLM Integration | llm_service.py | Google Gemini, fallback jika gagal |
 | Chat Endpoint | routers/chat.py | POST /api/v1/chat |
+| HWSD Service & Scoring | hwsd_service.py, hwsd_scoring.py | Raster lookup + SQLite caching + FAO-LECS scoring |
 | Citations Extraction | pipeline_service.py | _extract_citations() dari vector results |
 
 ## ✅ Fitur yang Sudah Selesai (Frontend)
@@ -162,8 +161,9 @@ iada_gis/
 | Fitur | File | Keterangan |
 |---|---|---|
 | Chat Screen | chat_screens.dart | ListView + auto-scroll ke bawah |
-| Chat Bubble | chat_bubble.dart | Bubble user/bot, spatial badge tap-to-map |
+| Chat Bubble | chat_bubble.dart | Bubble user/bot, spatial badge tap-to-map, HWSD badge |
 | Chat Input Bar | chat_input_bar.dart | Send message ke provider |
+| HWSD Card | hwsd_card.dart | Tampilkan hasil analisis kesesuaian lahan (S1/S2/S3/N) |
 | Citations Chip | citations_chip.dart | Tampilkan sumber dokumen |
 | Chat Provider (Riverpod) | chat_providers.dart | State management chat + API call |
 | API Service (Dio) | api_service.dart | HTTP client ke backend, 30s/60s timeout |
@@ -191,19 +191,17 @@ iada_gis/
 | Docker full stack | ⚠️ Hanya PostgreSQL ter-containerize | Low |
 | Dokumentasi /docs | ❌ Folder kosong | Low |
 | Widget/Unit Tests | ⚠️ Direktori test ada, test sangat minimal | Low |
-| LLM status di health check | ⚠️ Health check hardcode "not_connected_yet" | Medium |
 
 ---
 
 ## 🐛 Known Issues & Catatan Teknis
 
-1. **Health check LLM status salah** — GET /health mengembalikan "llm": "not_connected_yet" padahal LLM sudah terintegrasi. Status hardcoded di main.py.
-2. **database.py raise error saat startup** — Jika env var DB tidak ada, langsung throw ValueError. Tidak ada lazy initialization.
-3. **geojson_parser.dart kosong** — Parsing GeoJSON dilakukan langsung di map_view.dart (_processGeoJson()), bukan di utility class terpisah.
-4. **CORS terlalu terbuka** — allow_origins=["*"] harus direstriksi sebelum production.
-5. **go_router belum dipakai** — Navigasi via Navigator langsung, routing belum terstruktur.
-6. **map_screen.dart kosong** — Peta hanya tampil via bottom sheet, belum ada halaman peta dedicated.
-7. **API version inkonsisten** — main.py pakai env default "0.6.0" tapi health check hardcode "0.8.0".
+1. **database.py raise error saat startup** — Jika env var DB tidak ada, langsung throw ValueError. Tidak ada lazy initialization.
+2. **geojson_parser.dart kosong** — Parsing GeoJSON dilakukan langsung di map_view.dart (_processGeoJson()), bukan di utility class terpisah.
+3. **CORS terlalu terbuka** — allow_origins=["*"] harus direstriksi sebelum production.
+4. **go_router belum dipakai** — Navigasi via Navigator langsung, routing belum terstruktur.
+5. **map_screen.dart kosong** — Peta hanya tampil via bottom sheet, belum ada halaman peta dedicated.
+6. **API version inkonsisten** — main.py pakai env default "0.6.0" tapi health check versioning (skrg 0.9.0).
 
 ---
 
@@ -215,18 +213,18 @@ User ketik query
   → ChatNotifier.sendMessage()
   → ApiService.sendMessages() → POST /api/v1/chat
   → RAGPipeline.process()
-      → RegexQueryParser.parse()             ← intent, lokasi, tanaman, radius
+      → RegexQueryParser.parse()             ← intent (spatial/hwsd/doc), lokasi, tanaman
       → geocode_service.geocode()            ← lat/lon dari Nominatim/fallback
       → db_service.search_places_radius()   ← PostGIS point search
-      → db_service.query_intersecting_layers() ← GIS polygon layers
-      → _build_geojson()                     ← FeatureCollection JSON
+      → hwsd_service.get_soil_at_point()     ← Get Raster SMU → SQLite attributes
+      → hwsd_scoring.score_all_crops()       ← Score land suitability
+      → _build_geojson()                     ← FeatureCollection JSON untuk map
       → chroma_service.search()              ← vector semantic search
-      → llm_service.generate_answer()       ← Gemini generate
-  ← ChatResponse { answer, geo_json, citations, places_found, documents_found }
+      → llm_service.generate_answer()       ← Gemini generate text
+  ← ChatResponse { answer, geo_json, citations, hwsd_result }
   → MapProvider.updateGeoJson(geoJson)
-  → ChatBubble tampil dengan spatial badge (jika ada geo_json)
-  → User tap badge → showMapBottomSheet()
-  → MapView._processGeoJson() → render Polygon di FlutterMap OSM tiles
+  → ChatBubble tampil dengan badge HWSD/Map
+  → Render HWSD Card / Map Bottom Sheet
 ```
 
 ---
@@ -235,30 +233,29 @@ User ketik query
 
 | Area | Progress | Catatan |
 |---|---|---|
-| Backend Core (API + Pipeline) | ~90% | Hampir lengkap, minor polish |
+| Backend Core (API + Pipeline) | ~95% | Hampir lengkap, HWSD & RAG integrated |
 | Backend Data Layer (DB + Vector) | ~85% | OCR belum terintegrasi |
-| Frontend Chat Feature | ~85% | Fungsional end-to-end |
+| Frontend Chat Feature | ~95% | Fungsional end-to-end, HWSD UI lengkap |
 | Frontend Map Feature | ~65% | MapView ada, screen dedicated kosong |
 | Frontend Routing & Navigation | ~20% | go_router belum dipakai |
 | Testing | ~15% | Test files sangat minimal |
 | DevOps / Deployment | ~20% | Docker parsial, belum full stack |
 | Dokumentasi | ~30% | README backend bagus, docs/ kosong |
 
-**Overall: ~65% selesai** — Fitur inti (chat + peta + RAG pipeline) sudah berjalan end-to-end. Yang tersisa: refinement, fitur tambahan (GPS, routing), testing, dan deployment.
+**Overall: ~75% selesai** — Fitur inti (chat + peta + kesesuaian lahan HWSD + RAG pipeline) sudah berjalan menyeluruh end-to-end. Yang tersisa: refinement, fitur tambahan (GPS, routing), testing, dan deployment.
 
 ---
 
 ## 🎯 Prioritas Next Steps (Saran)
 
 ### Jangka Pendek
-1. Fix health check endpoint agar status LLM akurat
-2. Implementasi geojson_parser.dart sebagai utility class terpisah
-3. Tambah tombol "Gunakan Lokasi Saya" di chat input (pakai geolocator)
-4. Implementasi map_screen.dart sebagai halaman peta full
+1. Implementasi geojson_parser.dart sebagai utility class terpisah
+2. Tambah tombol "Gunakan Lokasi Saya" di chat input (pakai geolocator)
+3. Implementasi map_screen.dart sebagai halaman peta full
 
 ### Jangka Menengah
-5. Setup go_router untuk navigasi antar halaman (Chat ↔ Map ↔ Home)
-6. Integrasi OCR ke document_loader.py
+4. Setup go_router untuk navigasi antar halaman (Chat ↔ Map ↔ Home)
+5. Integrasi OCR ke document_loader.py
 7. Tambah widget test untuk ChatBubble dan MapView
 8. Docker Compose full stack (backend + frontend web)
 

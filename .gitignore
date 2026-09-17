@@ -46,6 +46,18 @@ chroma_db/
 *.sqlite3
 *.db
 
+# HWSD Data (terlalu besar, ~2GB)
+HWSD2_DB/
+HWSD2_RASTER/
+
+# Backend data & temp files
+backend/data/
+backend/chroma_db/
+backend/requirements_utf8.txt
+backend/cek_hwsd2.py
+backend/setup_hwsd_db.py
+backend/setup_hwsd_via_java.py
+
 # Docker volumes (auto-generated)
 postgres_data/
 

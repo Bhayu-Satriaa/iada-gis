@@ -22,6 +22,7 @@ class ChatResponse(BaseModel):
     documents_found: int
     citations: List[dict] = []
     geo_json: Optional[Dict] = None
+    hwsd_result: Optional[Dict] = None  # null jika tidak ada data HWSD
 
 @router.post("/chat")
 async def chat(request: ChatRequest):
@@ -46,5 +47,6 @@ async def chat(request: ChatRequest):
         places_found=len(result.spatial_results),
         documents_found=len(result.vector_results),
         citations=result.citations,
-        geo_json=result.geo_json
+        geo_json=result.geo_json,
+        hwsd_result=result.hwsd_result,
     )

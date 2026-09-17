@@ -22,6 +22,7 @@ class LLMService:
         4. Gunakan bahasa Indonesia yang santai dan mudah dipahami petani.
         5. Kalau data tidak cukup, bilang jujur: "Data belum tersedia untuk [X]".
         6. Jangan membuat informasi yang tidak ada di konteks!
+        7. Jika ada data kesesuaian lahan HWSD, jelaskan hasilnya dengan bahasa sederhana.
 
         FORMAT JAWABAN:
         - Lokasi: [nama tempat]
@@ -29,6 +30,11 @@ class LLMService:
         - Informasi: [rangkuman dari dokumen]
         - Rekomendasi: [saran praktis]
         """
+
+    def is_available(self) -> bool:
+        """Cek apakah LLM service terkonfigurasi (punya API key + model)"""
+        api_key = os.getenv("LLM_API_KEY")
+        return bool(api_key and self.model_name)
 
     async def generate_answer(self, context: str, user_query: str) -> Dict:
         """
