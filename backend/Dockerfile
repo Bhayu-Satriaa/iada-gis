@@ -2,8 +2,9 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Force rebuild
-ARG CACHE_BUST=1789728202
+# Force rebuild - timestamp: 1789728517
+ARG CACHE_BUST=1789728517
+RUN echo "Build at $CACHE_BUST"
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
