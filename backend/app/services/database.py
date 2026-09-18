@@ -67,7 +67,11 @@ class DatabaseService:
         try:
             with conn.cursor() as cur:
                 for statement in self.required_schema_statements():
-                    cur.execute(statement)
+                    try:
+                        cur.execute(statement)
+                    except Exception as e:
+                        # PostGIS mungkin tidak tersedia di cloud DB
+                        print(f"Schema statement skipped: {e}")
                 conn.commit()
         except Exception:
             conn.rollback()
