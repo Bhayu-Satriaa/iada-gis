@@ -2,6 +2,9 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# Force rebuild
+ARG CACHE_BUST=1789728202
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     libgdal-dev \
