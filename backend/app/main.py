@@ -21,6 +21,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def add_cors_headers(request, call_next):
+    if request.method == "OPTIONS":
+        from starlette.responses import Response
+        response = Response(status_code=200)
+    else:
+        response = await call_next(request)
+    origin = request.headers.get("origin", "*")
+    response.headers["Access-Control-Allow-Origin"] = origin
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    return response
+
 app.include_router(query.router, prefix="/api/v1", tags=["Query"])
 app.include_router(geocode.router, prefix="/api/v1", tags=["Geocoding"])
 app.include_router(spatial.router, prefix="/api/v1", tags=["Spatial"])

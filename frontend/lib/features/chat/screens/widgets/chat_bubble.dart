@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:frontend/features/chat/models/chat_message.dart';
 import 'package:frontend/features/chat/screens/widgets/citations_chip.dart';
 import 'package:frontend/features/chat/screens/widgets/hwsd_card.dart';
@@ -66,14 +67,36 @@ class ChatBubble extends StatelessWidget {
                 14.0,
                 hasCitations ? 6.0 : 12.0,
               ),
-              child: Text(
-                message.text,
-                style: TextStyle(
-                  height: 1.5,
-                  fontSize: 14,
-                  color: isUser ? Colors.white : AppTheme.cardForeground,
-                ),
-              ),
+              child: isUser
+                  ? Text(
+                      message.text,
+                      style: TextStyle(
+                        height: 1.5,
+                        fontSize: 14,
+                        color: Colors.white,
+                      ),
+                    )
+                  : MarkdownBody(
+                      data: message.text,
+                      styleSheet: MarkdownStyleSheet(
+                        p: TextStyle(
+                          height: 1.5,
+                          fontSize: 14,
+                          color: AppTheme.cardForeground,
+                        ),
+                        strong: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: AppTheme.cardForeground,
+                        ),
+                        em: TextStyle(
+                          fontStyle: FontStyle.italic,
+                          color: AppTheme.cardForeground,
+                        ),
+                        listBullet: TextStyle(
+                          color: AppTheme.primary,
+                        ),
+                      ),
+                    ),
             ),
 
             // Citations
