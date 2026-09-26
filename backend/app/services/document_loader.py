@@ -6,7 +6,7 @@ from typing import List
 class DocumentLoader:
     """Load dokumen dari berbagai sumber"""
 
-    DATA_FOLDER = os.getenv("DATA_FOLDER", r"D:\iada_gis\backend\data")
+    DATA_FOLDER = os.getenv("DATA_FOLDER", r"D:\Politani\IT Comp - IoT\iada_gis\backend\data")
 
     @staticmethod
     def load_dummy() -> List[Document]:

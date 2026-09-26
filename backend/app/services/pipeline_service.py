@@ -78,28 +78,38 @@ class RAGPipeline:
             )
             print(f"Found: {len(spatial_results)} places")
 
-        # 4) Query Polygon layer GIS
+        # 4) Query Polygon layer GIS — filter sesuai lokasi yang ditanyakan
         geo_json = None
-        if center_lat and center_lon:
-            print(f"\nQuerying GIS layers (polygon)...")
+        layer_centroid_lat, layer_centroid_lon = None, None
+        preferred_layer_type = self._match_layer_type(intent.location) if intent.location else None
+        
+        if preferred_layer_type:
+            # Ambil SEMUA polygon untuk area ini (tanpa filter radius)
+            print(f"\nQuerying GIS layers for type '{preferred_layer_type}'...")
             geo_query_start = time.time()
+            layer_results = self.spatial_db.get_layers_by_type(
+                preferred_layer_type, limit=200
+            )
+            geo_query_ms = int((time.time() - geo_query_start) * 1000)
+            print(f"Found: {len(layer_results)} polygons ({geo_query_ms}ms)")
             
-            preferred_layer_type = self._match_layer_type(intent.location) if intent.location else None
+            if layer_results:
+                geo_json = self._build_geojson(layer_results)
+                # Ambil centroid dari polygon pertama untuk HWSD scoring
+                first = layer_results[0]
+                layer_centroid_lat = first.get('centroid_lat')
+                layer_centroid_lon = first.get('centroid_lon')
+        elif center_lat and center_lon:
+            # Fallback: cari dalam radius
+            print(f"\nQuerying GIS layers (radius search)...")
+            geo_query_start = time.time()
             layer_results = self.spatial_db.query_intersecting_layers(
                 center_lat, center_lon, 
-                layer_type=preferred_layer_type,
                 radius_km=intent.radius_km,
                 max_results=10
             )
-
-            if not layer_results and preferred_layer_type:
-                print(f"Tidak ada hasil untuk layer '{preferred_layer_type}', coba tanpa filter...")
-                layer_results = self.spatial_db.query_intersecting_layers(
-                    center_lat, center_lon, radius_km=intent.radius_km, max_results=10
-                )
-
             geo_query_ms = int((time.time() - geo_query_start) * 1000)
-            print(f"Found: {len(layer_results)} intersecting layers ({geo_query_ms}ms)") 
+            print(f"Found: {len(layer_results)} intersecting layers ({geo_query_ms}ms)")
             if layer_results:
                 geo_json = self._build_geojson(layer_results)
 
@@ -110,60 +120,62 @@ class RAGPipeline:
         vector_results = self.vector_db.search(vector_query, top_k=5)
         print(f"Found: {len(vector_results)} docs")
 
-        # 5b) HWSD scoring (jika intent land_suitability atau ada koordinat)
+        # 5b) HWSD scoring — otomatis untuk spatial_search & land_suitability
         hwsd_result = None
-        if center_lat and center_lon:
-            is_land_suit = intent.type == IntentType.LAND_SUITABILITY.value
-            has_crop = intent.crop_type in ["padi", "jagung", "kelapa_sawit", "kedelai"]
+        # Tentukan koordinat untuk scoring: centroid polygon > geocode center
+        scoring_lat = layer_centroid_lat or center_lat
+        scoring_lon = layer_centroid_lon or center_lon
+        
+        if scoring_lat and scoring_lon:
+            try:
+                from app.services.hwsd_service import hwsd_service
+                from app.services.hwsd_scoring import scoring_engine, normalize_crop_type
 
-            if is_land_suit or (has_crop and intent.type != "spatial_search"):
-                try:
-                    from app.services.hwsd_service import hwsd_service
-                    from app.services.hwsd_scoring import scoring_engine, normalize_crop_type
+                print(f"\nHWSD scoring di ({scoring_lat}, {scoring_lon})...")
+                soil = hwsd_service.get_soil_at_point(scoring_lat, scoring_lon)
 
-                    print(f"\nHWSD scoring di ({center_lat}, {center_lon})...")
-                    soil = hwsd_service.get_soil_at_point(center_lat, center_lon)
-
-                    if soil:
-                        crop_key = normalize_crop_type(intent.crop_type) if intent.crop_type else None
-                        if crop_key:
-                            scores = [scoring_engine.score(
-                                crop_key, soil.texture, soil.ph_h2o,
-                                soil.drainage, soil.organic_carbon
-                            )]
-                        else:
-                            scores = scoring_engine.score_all_crops(
-                                soil.texture, soil.ph_h2o,
-                                soil.drainage, soil.organic_carbon
-                            )
-
-                        hwsd_result = {
-                            "smu_id": soil.smu_id,
-                            "soil_info": {
-                                "texture": soil.texture_label,
-                                "ph": soil.ph_h2o,
-                                "drainage": soil.drainage_label,
-                                "oc": soil.organic_carbon,
-                                "completeness": soil.data_completeness,
-                            },
-                            "scores": [
-                                {
-                                    "crop": s.crop_name,
-                                    "crop_key": s.crop_key,
-                                    "overall": s.overall.value,
-                                    "label": s.label,
-                                    "emoji": s.emoji,
-                                    "limiting_factors": s.limiting_factors,
-                                    "note": s.note,
-                                }
-                                for s in scores
-                            ]
-                        }
-                        print(f"HWSD scoring selesai: {len(scores)} komoditas")
+                if soil:
+                    crop_key = normalize_crop_type(intent.crop_type) if intent.crop_type else None
+                    if crop_key:
+                        scores = [scoring_engine.score(
+                            crop_key, soil.texture, soil.ph_h2o,
+                            soil.drainage, soil.organic_carbon
+                        )]
                     else:
-                        print("HWSD: tidak ada data tanah untuk koordinat ini")
-                except Exception as e:
-                    print(f"HWSD scoring error (non-critical): {e}")
+                        scores = scoring_engine.score_all_crops(
+                            soil.texture, soil.ph_h2o,
+                            soil.drainage, soil.organic_carbon
+                        )
+
+                    hwsd_result = {
+                        "smu_id": soil.smu_id,
+                        "lat": scoring_lat,
+                        "lon": scoring_lon,
+                        "soil_info": {
+                            "texture": soil.texture_label,
+                            "ph": soil.ph_h2o,
+                            "drainage": soil.drainage_label,
+                            "oc": soil.organic_carbon,
+                            "completeness": soil.data_completeness,
+                        },
+                        "scores": [
+                            {
+                                "crop": s.crop_name,
+                                "crop_key": s.crop_key,
+                                "overall": s.overall.value,
+                                "label": s.label,
+                                "emoji": s.emoji,
+                                "limiting_factors": s.limiting_factors,
+                                "note": s.note,
+                            }
+                            for s in scores
+                        ]
+                    }
+                    print(f"HWSD scoring selesai: {len(scores)} komoditas")
+                else:
+                    print("HWSD: tidak ada data tanah untuk koordinat ini")
+            except Exception as e:
+                print(f"HWSD scoring error (non-critical): {e}")
 
         # 6) Context
         context = self._build_context(intent, spatial_results, vector_results, hwsd_result)
@@ -223,8 +235,11 @@ class RAGPipeline:
         features = []
         for row in layer_results:
             try:
-                geometry = json.loads(row["geojson"])
-            except (KeyError, json.JSONDecodeError):
+                geojson_str = row.get("geojson")
+                if not geojson_str:
+                    continue
+                geometry = json.loads(geojson_str)
+            except (KeyError, json.JSONDecodeError, TypeError):
                 continue
             
             features.append({

@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:frontend/app/theme.dart';
+import 'package:frontend/app/chat_map_provider.dart';
 import 'package:frontend/features/map/providers/map_providers.dart';
 import 'package:frontend/features/map/screens/widgets/scoring_detail_sheet.dart';
 
@@ -27,11 +29,23 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   List<Polygon> _buildPolygons(List<Map<String, dynamic>> layers) {
     List<Polygon> polygons = [];
     for (var layer in layers) {
-      if (layer.containsKey('coordinates')) {
-        try {
-          final coords = layer['coordinates'] as List<dynamic>;
+      try {
+        // Parse GeoJSON from 'geojson' field (string from PostGIS)
+        final geojsonStr = layer['geojson'] as String?;
+        if (geojsonStr == null) continue;
+        
+        final geojson = _parseJson(geojsonStr);
+        if (geojson == null) continue;
+        
+        final type = geojson['type'] as String?;
+        final coordinates = geojson['coordinates'] as List<dynamic>?;
+        if (coordinates == null) continue;
+        
+        if (type == 'Polygon') {
+          // Polygon: [[ring1], [ring2], ...]
+          final outerRing = coordinates[0] as List<dynamic>;
           List<LatLng> points = [];
-          for (var coord in coords) {
+          for (var coord in outerRing) {
             if (coord is List && coord.length >= 2) {
               points.add(LatLng(
                 (coord[1] as num).toDouble(),
@@ -44,13 +58,151 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               points: points,
               borderColor: AppTheme.primary,
               color: AppTheme.primary.withOpacity(0.2),
-              borderStrokeWidth: 2,
+              borderStrokeWidth: 1.5,
             ));
           }
-        } catch (_) {}
-      }
+        } else if (type == 'MultiPolygon') {
+          // MultiPolygon: [[[ring1], [ring2]], [[ring1]]]
+          for (var polygonCoords in coordinates) {
+            if (polygonCoords is List && polygonCoords.isNotEmpty) {
+              final outerRing = polygonCoords[0] as List<dynamic>;
+              List<LatLng> points = [];
+              for (var coord in outerRing) {
+                if (coord is List && coord.length >= 2) {
+                  points.add(LatLng(
+                    (coord[1] as num).toDouble(),
+                    (coord[0] as num).toDouble(),
+                  ));
+                }
+              }
+              if (points.length >= 3) {
+                polygons.add(Polygon(
+                  points: points,
+                  borderColor: AppTheme.primary,
+                  color: AppTheme.primary.withOpacity(0.2),
+                  borderStrokeWidth: 1.5,
+                ));
+              }
+            }
+          }
+        }
+      } catch (_) {}
     }
     return polygons;
+  }
+
+  Map<String, dynamic>? _parseJson(String str) {
+    try {
+      final decoded = str;
+      // Simple JSON parse for GeoJSON
+      if (decoded.startsWith('{')) {
+        // Use dart:convert
+        return _decodeJson(decoded);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Map<String, dynamic>? _decodeJson(String str) {
+    try {
+      return jsonDecode(str) as Map<String, dynamic>;
+    } catch (_) {}
+    return null;
+  }
+
+  List<Polygon> _buildPolygonsFromGeoJson(Map<String, dynamic> geoJson) {
+    List<Polygon> polygons = [];
+    final features = geoJson['features'] as List<dynamic>? ?? [];
+    
+    for (var feature in features) {
+      try {
+        final geometry = feature['geometry'] as Map<String, dynamic>?;
+        if (geometry == null) continue;
+        
+        final type = geometry['type'] as String?;
+        final coordinates = geometry['coordinates'] as List<dynamic>?;
+        if (coordinates == null) continue;
+        
+        if (type == 'Polygon') {
+          final outerRing = coordinates[0] as List<dynamic>;
+          List<LatLng> points = [];
+          for (var coord in outerRing) {
+            if (coord is List && coord.length >= 2) {
+              points.add(LatLng(
+                (coord[1] as num).toDouble(),
+                (coord[0] as num).toDouble(),
+              ));
+            }
+          }
+          if (points.length >= 3) {
+            polygons.add(Polygon(
+              points: points,
+              borderColor: AppTheme.primary,
+              color: AppTheme.primary.withOpacity(0.2),
+              borderStrokeWidth: 1.5,
+            ));
+          }
+        } else if (type == 'MultiPolygon') {
+          for (var polygonCoords in coordinates) {
+            if (polygonCoords is List && polygonCoords.isNotEmpty) {
+              final outerRing = polygonCoords[0] as List<dynamic>;
+              List<LatLng> points = [];
+              for (var coord in outerRing) {
+                if (coord is List && coord.length >= 2) {
+                  points.add(LatLng(
+                    (coord[1] as num).toDouble(),
+                    (coord[0] as num).toDouble(),
+                  ));
+                }
+              }
+              if (points.length >= 3) {
+                polygons.add(Polygon(
+                  points: points,
+                  borderColor: AppTheme.primary,
+                  color: AppTheme.primary.withOpacity(0.2),
+                  borderStrokeWidth: 1.5,
+                ));
+              }
+            }
+          }
+        }
+      } catch (_) {}
+    }
+    return polygons;
+  }
+
+  void _fitPolygons(List<Polygon> polygons) {
+    if (polygons.isEmpty) return;
+    
+    double minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
+    for (var polygon in polygons) {
+      for (var point in polygon.points) {
+        if (point.latitude < minLat) minLat = point.latitude;
+        if (point.latitude > maxLat) maxLat = point.latitude;
+        if (point.longitude < minLon) minLon = point.longitude;
+        if (point.longitude > maxLon) maxLon = point.longitude;
+      }
+    }
+    
+    final center = LatLng(
+      (minLat + maxLat) / 2,
+      (minLon + maxLon) / 2,
+    );
+    
+    // Hitung zoom berdasarkan bounds
+    final latDiff = maxLat - minLat;
+    final lonDiff = maxLon - minLon;
+    final maxDiff = latDiff > lonDiff ? latDiff : lonDiff;
+    double zoom = 10;
+    if (maxDiff > 1) zoom = 9;
+    else if (maxDiff > 0.5) zoom = 10;
+    else if (maxDiff > 0.2) zoom = 11;
+    else if (maxDiff > 0.1) zoom = 12;
+    else zoom = 13;
+    
+    try {
+      _mapController.move(center, zoom);
+    } catch (_) {}
   }
 
   List<Marker> _buildMarkers(List<Map<String, dynamic>> scoringData) {
@@ -99,6 +251,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     final layersState = ref.watch(layersProvider);
     final scoringState = ref.watch(scoringProvider);
     final scoringMarkers = ref.watch(scoringMarkersProvider);
+    final chatMapData = ref.watch(chatMapProvider);
 
     // Auto-save scoring result to markers
     ref.listen<ScoringState>(scoringProvider, (prev, next) {
@@ -116,13 +269,73 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       }
     });
 
-    final polygons = _buildPolygons(layersState.layers);
-    final markers = _buildMarkers(scoringMarkers);
+    // Build polygons dari layers API
+    List<Polygon> polygons = _buildPolygons(layersState.layers);
+    List<Marker> markers = _buildMarkers(scoringMarkers);
+
+    // Tambah polygon dari chat data (jika ada)
+    if (chatMapData.geoJson != null) {
+      final chatPolygons = _buildPolygonsFromGeoJson(chatMapData.geoJson!);
+      if (chatPolygons.isNotEmpty) {
+        polygons = chatPolygons; // Ganti dengan polygon dari chat
+        
+        // Auto-center map ke polygon dari chat
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _fitPolygons(chatPolygons);
+        });
+      }
+      
+      // Tambah marker HWSD dari chat
+      if (chatMapData.hwsdResult != null) {
+        final hwsd = chatMapData.hwsdResult!;
+        final lat = (hwsd['lat'] as num?)?.toDouble();
+        final lon = (hwsd['lon'] as num?)?.toDouble();
+        if (lat != null && lon != null) {
+          final scores = hwsd['scores'] as List<dynamic>? ?? [];
+          final primaryScore = scores.isNotEmpty ? scores[0] : null;
+          final color = _scoreColor(primaryScore?['overall'] ?? 'N');
+          markers.add(Marker(
+            point: LatLng(lat, lon),
+            width: 40,
+            height: 40,
+            child: GestureDetector(
+              onTap: () => _showScoringDetail(hwsd),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: color,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 3),
+                  boxShadow: [
+                    BoxShadow(
+                      color: color.withOpacity(0.4),
+                      blurRadius: 10,
+                      spreadRadius: 3,
+                    ),
+                  ],
+                ),
+                child: Center(
+                  child: Text(primaryScore?['emoji'] ?? '❓',
+                      style: const TextStyle(fontSize: 18)),
+                ),
+              ),
+            ),
+          ));
+        }
+      }
+    }
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Peta Pertanian'),
         actions: [
+          if (chatMapData.geoJson != null)
+            IconButton(
+              icon: const Icon(Icons.layers),
+              onPressed: () {
+                ref.read(chatMapProvider.notifier).clear();
+              },
+              tooltip: 'Tampilkan Semua Layer',
+            ),
           if (polygons.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.fit_screen),
@@ -135,6 +348,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               ref.read(layersProvider.notifier).fetchLayers();
               ref.read(scoringMarkersProvider.notifier).clear();
               ref.read(scoringProvider.notifier).clear();
+              ref.read(chatMapProvider.notifier).clear();
             },
             tooltip: 'Refresh',
           ),

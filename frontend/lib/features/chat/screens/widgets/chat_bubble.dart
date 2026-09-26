@@ -1,17 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:frontend/features/chat/models/chat_message.dart';
 import 'package:frontend/features/chat/screens/widgets/citations_chip.dart';
 import 'package:frontend/features/chat/screens/widgets/hwsd_card.dart';
+import 'package:frontend/features/chat/screens/widgets/chat_map_preview.dart';
+import 'package:frontend/app/tab_provider.dart';
+import 'package:frontend/app/chat_map_provider.dart';
 import 'package:frontend/app/theme.dart';
 
-class ChatBubble extends StatelessWidget {
+class ChatBubble extends ConsumerWidget {
   final UIMessage message;
 
   const ChatBubble({super.key, required this.message});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final isUser = message.isUser;
     final botData = message.botData;
     final hasSpatialData = !isUser && botData?.geoJson != null;
@@ -99,6 +103,19 @@ class ChatBubble extends StatelessWidget {
                     ),
             ),
 
+            // Mini Map Preview (jika ada geo_json)
+            if (hasSpatialData && botData!.geoJson != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: ChatMapPreview(
+                  geoJson: botData.geoJson!,
+                  hwsdResult: botData.hwsdResult,
+                  onTap: () {
+                    // TODO: Navigate to full map screen with this data
+                  },
+                ),
+              ),
+
             // Citations
             if (hasCitations)
               Padding(
@@ -120,7 +137,7 @@ class ChatBubble extends StatelessWidget {
               ),
 
             // Action buttons (lihat peta)
-            if (hasSpatialData) _buildActionButtons(context),
+            if (hasSpatialData) _buildActionButtons(context, ref, botData),
           ],
         ),
       ),
@@ -225,7 +242,7 @@ class ChatBubble extends StatelessWidget {
     );
   }
 
-  Widget _buildActionButtons(BuildContext context) {
+  Widget _buildActionButtons(BuildContext context, WidgetRef ref, ChatResponse? botData) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
       child: Row(
@@ -233,8 +250,15 @@ class ChatBubble extends StatelessWidget {
           Expanded(
             child: OutlinedButton.icon(
               onPressed: () {
+                // Simpan data polygon + scoring ke provider
+                if (botData?.geoJson != null) {
+                  ref.read(chatMapProvider.notifier).setMapData(
+                    botData!.geoJson!,
+                    botData.hwsdResult,
+                  );
+                }
                 // Navigate ke tab peta (index 1)
-                // TODO: Implement navigation to map tab
+                ref.read(currentTabProvider.notifier).state = 1;
               },
               icon: Icon(Icons.map, size: 16, color: AppTheme.primary),
               label: Text(

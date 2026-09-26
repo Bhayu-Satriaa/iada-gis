@@ -69,6 +69,25 @@ class ApiService {
     }
   }
 
+  /// Fetch all layers with GeoJSON geometry
+  Future<List<Map<String, dynamic>>> getLayersGeojson({String? layerType, int limit = 200}) async {
+    try {
+      final queryParams = <String, dynamic>{'limit': limit};
+      if (layerType != null) queryParams['layer_type'] = layerType;
+      final response = await _dio.get('${ApiConstants.layersEndpoint}/geojson', queryParameters: queryParams);
+      final data = response.data;
+      if (data is Map && data.containsKey('features')) {
+        final features = data['features'];
+        if (features is List) {
+          return features.cast<Map<String, dynamic>>();
+        }
+      }
+      return [];
+    } on DioException catch (e) {
+      throw Exception('Gagal memuat geojson: ${e.message}');
+    }
+  }
+
   /// Fetch land suitability scoring
   Future<Map<String, dynamic>> getLandSuitability(
       double lat, double lon) async {

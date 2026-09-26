@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:frontend/app/theme.dart';
+import 'package:frontend/app/tab_provider.dart';
 import 'package:frontend/features/chat/screens/chat_screens.dart';
 import 'package:frontend/features/map/screens/map_screen.dart';
 
@@ -10,35 +12,30 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'IADA-GIS',
-      debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
+      debugShowCheckedModeBanner: false,
       home: const MainScreen(),
     );
   }
 }
 
-class MainScreen extends StatefulWidget {
+class MainScreen extends ConsumerWidget {
   const MainScreen({super.key});
 
   @override
-  State<MainScreen> createState() => _MainScreenState();
-}
+  Widget build(BuildContext context, WidgetRef ref) {
+    final currentIndex = ref.watch(currentTabProvider);
 
-class _MainScreenState extends State<MainScreen> {
-  int _currentIndex = 0;
+    final List<Widget> screens = [
+      const ChatScreens(),
+      const MapScreen(),
+      const _DataScreen(),
+    ];
 
-  final List<Widget> _screens = [
-    const ChatScreens(),
-    const MapScreen(),
-    const _DataScreen(),
-  ];
-
-  @override
-  Widget build(BuildContext context) {
     return Scaffold(
       body: IndexedStack(
-        index: _currentIndex,
-        children: _screens,
+        index: currentIndex,
+        children: screens,
       ),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
@@ -51,8 +48,9 @@ class _MainScreenState extends State<MainScreen> {
           ],
         ),
         child: BottomNavigationBar(
-          currentIndex: _currentIndex,
-          onTap: (index) => setState(() => _currentIndex = index),
+          currentIndex: currentIndex,
+          onTap: (index) =>
+              ref.read(currentTabProvider.notifier).state = index,
           items: const [
             BottomNavigationBarItem(
               icon: Icon(Icons.chat_bubble_outline),
@@ -76,18 +74,31 @@ class _MainScreenState extends State<MainScreen> {
   }
 }
 
-// Placeholder untuk Data screen
 class _DataScreen extends StatelessWidget {
   const _DataScreen();
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Data Tanah'),
-      ),
+      appBar: AppBar(title: const Text('Data')),
       body: const Center(
-        child: Text('Halaman Data HWSD'),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.analytics, size: 64, color: Colors.grey),
+            SizedBox(height: 16),
+            Text(
+              'Data Pertanian',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+            ),
+            SizedBox(height: 8),
+            Text(
+              'Halaman ini akan menampilkan\nstatistik dan data pertanian',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.grey),
+            ),
+          ],
+        ),
       ),
     );
   }

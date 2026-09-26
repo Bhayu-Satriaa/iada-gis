@@ -76,6 +76,7 @@ class RegexQueryParser:
     KNOWN_PLACES = [
         'samarinda ulu', 'samarinda ilir', 'sungai kunjang', 'palaran', 
         'sambutan', 'loa janan', 'bengalon', 'sangatta', 'kutai kartanegara',
+        'kutai barat', 'kutai timur', 'kubar',
         'bontang', 'tanjung redeb', 'sendawar', 'melak', 'barong tongkok',
         'muara badak', 'muara jawa', 'sepinggan', 'balikpapan', 'samarinda'
     ]

@@ -124,6 +124,15 @@ async def list_layers():
     layers = db_service.list_layer_types()
     return {"count": len(layers), "layers": layers}
 
+@router.get("/layers/geojson")
+async def get_layers_geojson(
+    layer_type: Optional[str] = Query(None, description="Filter by layer type"),
+    limit: int = Query(200, description="Max features")
+):
+    """Ambil semua layer dengan GeoJSON geometry untuk render di map"""
+    features = db_service.get_all_layers_geojson(layer_type=layer_type, limit=limit)
+    return {"count": len(features), "features": features}
+
 @router.get("/layers/query")
 async def query_layers_at_point(
     lat: float = Query(...), lon: float = Query(...),

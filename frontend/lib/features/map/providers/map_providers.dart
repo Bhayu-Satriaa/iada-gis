@@ -30,7 +30,7 @@ class LayersNotifier extends Notifier<LayersState> {
     state = state.copyWith(isLoading: true, error: null);
     try {
       final api = ref.read(apiServiceProvider);
-      final response = await api.getLayers();
+      final response = await api.getLayersGeojson(limit: 200);
       state = LayersState(layers: response, isLoading: false);
     } catch (e) {
       state = LayersState(

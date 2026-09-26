@@ -208,6 +208,24 @@ class DatabaseService:
         finally:
             self.pool.putconn(conn)
 
+    def get_layers_by_type(self, layer_type: str, limit: int = 200) -> List[Dict]:
+        """Ambil SEMUA polygon untuk layer_type tertentu (tanpa filter radius)"""
+        conn = self.pool.getconn()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT id, name, layer_type, properties,
+                        ST_AsGeoJSON(ST_Simplify(geom, 0.0001)) as geojson,
+                        ST_Y(ST_Centroid(geom)) as centroid_lat,
+                        ST_X(ST_Centroid(geom)) as centroid_lon
+                    FROM public.gis_layers
+                    WHERE layer_type = %s
+                    LIMIT %s
+                """, (layer_type, limit))
+                return [dict(row) for row in cur.fetchall()]
+        finally:
+            self.pool.putconn(conn)
+
     def list_layer_types(self) -> List[Dict]:
         """Daftar layer GIS yang tersedia beserta jumlah fiturnya (untuk endpoint GET /layers)"""
         conn = self.pool.getconn()
@@ -222,7 +240,44 @@ class DatabaseService:
         finally:
             self.pool.putconn(conn)
     
-    # def insert_shapefile_geometry(self, name: str, category: str, geom_wkt: str, properties: dict = None) -> int:
+    def list_layer_types(self) -> List[Dict]:
+        """List semua tipe layer yang tersedia"""
+        conn = self.pool.getconn()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT layer_type, COUNT(*) as feature_count
+                    FROM public.gis_layers
+                    GROUP BY layer_type
+                    ORDER BY layer_type
+                """)
+                return [dict(row) for row in cur.fetchall()]
+        finally:
+            self.pool.putconn(conn)
+
+    def get_all_layers_geojson(self, layer_type: str = None, limit: int = 200) -> List[Dict]:
+        """Ambil semua layer dengan GeoJSON geometry"""
+        conn = self.pool.getconn()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                if layer_type:
+                    cur.execute("""
+                        SELECT id, name, layer_type, properties,
+                            ST_AsGeoJSON(ST_Simplify(geom, 0.0001)) as geojson
+                        FROM public.gis_layers
+                        WHERE layer_type = %s
+                        LIMIT %s
+                    """, (layer_type, limit))
+                else:
+                    cur.execute("""
+                        SELECT id, name, layer_type, properties,
+                            ST_AsGeoJSON(ST_Simplify(geom, 0.0001)) as geojson
+                        FROM public.gis_layers
+                        LIMIT %s
+                    """, (limit,))
+                return [dict(row) for row in cur.fetchall()]
+        finally:
+            self.pool.putconn(conn)
         """Insert geometri dari shapefile (polygon/point) ke PostGIS"""
         import json
         conn = self.pool.getconn()

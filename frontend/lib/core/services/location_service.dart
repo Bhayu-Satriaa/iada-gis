@@ -29,10 +29,15 @@ class LocationService {
         return null;
       }
 
-      // 3. Ambil posisi
+      // 3. Ambil posisi (timeout 10 detik)
       Position position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 15),
+        timeLimit: const Duration(seconds: 10),
+      ).timeout(
+        const Duration(seconds: 12),
+        onTimeout: () {
+          throw Exception('Timeout: Lokasi tidak dapat diambil dalam 12 detik');
+        },
       );
 
       return position;
