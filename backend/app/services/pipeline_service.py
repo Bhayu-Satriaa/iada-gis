@@ -147,30 +147,56 @@ class RAGPipeline:
                             soil.drainage, soil.organic_carbon
                         )
 
+                    # Bentuk data HARUS sama dengan response POST /land-suitability
+                    # (SoilInfoOut + CropScoreOut) supaya semua widget frontend
+                    # bisa membaca key yang sama. Key pendek seperti `texture`,
+                    # `ph`, `oc`, dan `crop` sudah tidak dipakai lagi.
                     hwsd_result = {
-                        "smu_id": soil.smu_id,
                         "lat": scoring_lat,
                         "lon": scoring_lon,
                         "soil_info": {
-                            "texture": soil.texture_label,
-                            "ph": soil.ph_h2o,
-                            "drainage": soil.drainage_label,
-                            "oc": soil.organic_carbon,
-                            "completeness": soil.data_completeness,
+                            "smu_id": soil.smu_id,
+                            "share_pct": soil.share,
+                            "texture_code": soil.texture,
+                            "texture_label": soil.texture_label,
+                            "ph_h2o": soil.ph_h2o,
+                            "drainage_code": soil.drainage,
+                            "drainage_label": soil.drainage_label,
+                            "organic_carbon_pct": soil.organic_carbon,
+                            "data_completeness": soil.data_completeness,
                         },
                         "scores": [
                             {
-                                "crop": s.crop_name,
                                 "crop_key": s.crop_key,
+                                "crop_name": s.crop_name,
                                 "overall": s.overall.value,
                                 "label": s.label,
                                 "emoji": s.emoji,
                                 "limiting_factors": s.limiting_factors,
+                                "parameters": [
+                                    {
+                                        "parameter": p.parameter,
+                                        "value": p.value,
+                                        "suitability": p.suitability.value,
+                                        "reason": p.reason,
+                                    }
+                                    for p in s.parameters
+                                ],
                                 "note": s.note,
+                                "data_sufficient": s.data_sufficient,
                             }
                             for s in scores
-                        ]
+                        ],
                     }
+                    hwsd_result["summary"] = "\n".join(
+                        f"{s['emoji']} {s['crop_name']}: {s['label']}"
+                        + (
+                            f"\n   Faktor pembatas: {', '.join(s['limiting_factors'])}"
+                            if s["limiting_factors"]
+                            else ""
+                        )
+                        for s in hwsd_result["scores"]
+                    )
                     print(f"HWSD scoring selesai: {len(scores)} komoditas")
                 else:
                     print("HWSD: tidak ada data tanah untuk koordinat ini")
@@ -328,19 +354,36 @@ class RAGPipeline:
         if hwsd_result:
             lines.append(f"\n--- Analisis Kesesuaian Lahan HWSD ---")
             soil = hwsd_result.get("soil_info", {})
-            lines.append(f"Data Tanah (SMU ID: {hwsd_result.get('smu_id')})")
-            lines.append(f"  Tekstur  : {soil.get('texture', 'N/A')}")
-            lines.append(f"  pH       : {soil.get('ph', 'N/A')}")
-            lines.append(f"  Drainase : {soil.get('drainage', 'N/A')}")
-            lines.append(f"  Org. Carbon: {soil.get('oc', 'N/A')}%")
+            lines.append(f"Data Tanah (SMU ID: {soil.get('smu_id', 'N/A')})")
+            lines.append(f"  Tekstur  : {soil.get('texture_label', 'N/A')}")
+            lines.append(f"  pH       : {soil.get('ph_h2o', 'N/A')}")
+            lines.append(f"  Drainase : {soil.get('drainage_label', 'N/A')}")
+            lines.append(f"  Org. Carbon: {soil.get('organic_carbon_pct', 'N/A')}%")
+            lines.append(f"  Kelengkapan data: {soil.get('data_completeness', 'unknown')}")
             lines.append("")
             lines.append("Hasil Scoring Kesesuaian Lahan:")
             for s in hwsd_result.get("scores", []):
-                lines.append(f"  {s['emoji']} {s['crop']}: {s['label']} ({s['overall']})")
+                lines.append(f"  {s['emoji']} {s['crop_name']}: {s['label']} ({s['overall']})")
                 if s.get('limiting_factors'):
                     lines.append(f"     Faktor pembatas: {', '.join(s['limiting_factors'])}")
                 if s.get('note'):
                     lines.append(f"     Catatan: {s['note']}")
+
+            # Beri tahu LLM bila skor berbasis data parsial, supaya jawabannya
+            # tidak menyiratkan kepastian yang tidak dimiliki datanya.
+            partial = [
+                s['crop_name'] for s in hwsd_result.get("scores", [])
+                if s.get("data_sufficient") is False
+            ]
+            if partial:
+                lines.append("")
+                lines.append(
+                    "PENTING: skor untuk "
+                    + ", ".join(partial)
+                    + " dihitung dengan data tanah yang TIDAK lengkap "
+                    "(parameter kosong diasumsikan S2). Sampaikan bahwa hasil ini "
+                    "bersifat perkiraan dan sebutkan parameter yang tidak tersedia."
+                )
 
         return "\n".join(lines)
     

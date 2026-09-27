@@ -66,7 +66,7 @@ class ScoringDetailSheet extends StatelessWidget {
                         ),
                         if (soil != null)
                           Text(
-                            'SMU ${soil['smu_id']} • ${soil['texture_label'] ?? '-'}',
+                            'SMU ${soil['smu_id'] ?? '-'} • ${soil['texture_label'] ?? '-'}',
                             style: TextStyle(
                               fontSize: 12,
                               color: AppTheme.mutedForeground,
@@ -77,7 +77,12 @@ class ScoringDetailSheet extends StatelessWidget {
                   ),
                 ],
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 16),
+
+              // Peringatan kepastian data
+              if (_dataIncomplete(soil, scores))
+                _buildDataWarningCard(soil, scores),
+              if (_dataIncomplete(soil, scores)) const SizedBox(height: 16),
 
               // Soil info card
               if (soil != null) _buildSoilInfoCard(soil),
@@ -117,6 +122,85 @@ class ScoringDetailSheet extends StatelessWidget {
             ],
           );
         },
+      ),
+    );
+  }
+
+  /// Skor dianggap tidak berkepastian penuh bila data tanah tidak lengkap
+  /// atau ada komoditas yang dihitung dengan data parsial.
+  bool _dataIncomplete(Map<String, dynamic>? soil, List<dynamic> scores) {
+    if (soil == null) return true;
+    if ((soil['data_completeness'] ?? '').toString() != 'full') return true;
+    for (final s in scores) {
+      if (s is Map && s['data_sufficient'] == false) return true;
+    }
+    return false;
+  }
+
+  /// Kumpulkan nama parameter yang nilainya tidak tersedia (lintas komoditas)
+  List<String> _missingParameters(List<dynamic> scores) {
+    final missing = <String>{};
+    for (final s in scores) {
+      if (s is! Map) continue;
+      final params = s['parameters'] as List<dynamic>? ?? [];
+      for (final p in params) {
+        if (p is Map && p['value'] == null && p['parameter'] != 'Drainase') {
+          missing.add('${p['parameter']}');
+        }
+      }
+    }
+    return missing.toList();
+  }
+
+  Widget _buildDataWarningCard(
+      Map<String, dynamic>? soil, List<dynamic> scores) {
+    final missing = _missingParameters(scores);
+    final completeness = soil?['data_completeness'] ?? 'tidak diketahui';
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF3E0),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFFFB74D)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.warning_amber_rounded,
+                  size: 18, color: Color(0xFFE65100)),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'Kepastian data terbatas',
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFFE65100),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            missing.isEmpty
+                ? 'Kelengkapan data tanah: $completeness. '
+                    'Skor di bawah dihitung dari data yang tersedia dan '
+                    'bersifat perkiraan.'
+                : 'Parameter tidak tersedia: ${missing.join(', ')}. '
+                    'Nilai yang kosong diasumsikan S2 (cukup sesuai) oleh '
+                    'mesin penilai, sehingga skor di bawah bersifat '
+                    'perkiraan — bukan hasil pengukuran lengkap.',
+            style: const TextStyle(
+              fontSize: 11.5,
+              color: Color(0xFF8D6E63),
+              height: 1.4,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -269,29 +353,62 @@ class ScoringDetailSheet extends StatelessWidget {
                 ),
                 children: params.map<Widget>((p) {
                   final pColor = _scoreColor(p['suitability'] ?? '-');
+                  final pValue = p['value'];
                   return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 2),
-                    child: Row(
+                    padding: const EdgeInsets.symmetric(vertical: 3),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Expanded(
-                          child: Text(
-                            '${p['parameter'] ?? '-'}',
-                            style: TextStyle(
-                                fontSize: 11, color: AppTheme.mutedForeground),
-                          ),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                '${p['parameter'] ?? '-'}'
+                                '${pValue == null ? ' (tidak tersedia)' : ': $pValue'}',
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    color: AppTheme.mutedForeground),
+                              ),
+                            ),
+                            Text(
+                              '${p['suitability'] ?? '-'}',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: pColor,
+                              ),
+                            ),
+                          ],
                         ),
-                        Text(
-                          '${p['suitability'] ?? '-'}',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: pColor,
+                        if ((p['reason'] ?? '').toString().isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 8, top: 1),
+                            child: Text(
+                              '${p['reason']}',
+                              style: const TextStyle(
+                                fontSize: 10,
+                                color: Color(0xFF9E9E9E),
+                                height: 1.3,
+                              ),
+                            ),
                           ),
-                        ),
                       ],
                     ),
                   );
                 }).toList(),
+              ),
+            ),
+          // Catatan dari mesin penilai (mis. peringatan data parsial)
+          if ((score['note'] ?? '').toString().isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                '${score['note']}',
+                style: const TextStyle(
+                  fontSize: 10.5,
+                  color: Color(0xFF8D6E63),
+                  height: 1.4,
+                ),
               ),
             ),
         ],

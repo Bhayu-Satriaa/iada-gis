@@ -36,6 +36,10 @@ class _HwsdCardState extends State<HwsdCard> {
           // ── Header ──────────────────────────────────────────────────────
           _buildHeader(context, scores),
 
+          // ── Peringatan kepastian data ────────────────────────────────────
+          if (_dataIncomplete(soilInfo, scores))
+            _buildDataWarning(soilInfo, scores),
+
           // ── Skor per komoditas ───────────────────────────────────────────
           if (scores.isNotEmpty)
             Padding(
@@ -136,7 +140,7 @@ class _HwsdCardState extends State<HwsdCard> {
 
   Widget _buildScoreRow(Map<String, dynamic> score) {
     final overall = score['overall'] as String? ?? 'N';
-    final cropName = score['crop'] as String? ?? '-';
+    final cropName = score['crop_name'] as String? ?? '-';
     final label = _getSuitabilityLabel(overall);
     final color = _getSuitabilityColor(overall);
     final emoji = _getSuitabilityEmoji(overall);
@@ -239,16 +243,19 @@ class _HwsdCardState extends State<HwsdCard> {
           ),
           const SizedBox(height: 6),
           _soilRow(Icons.texture, 'Tekstur',
-              soil['texture']?.toString() ?? 'N/A'),
+              soil['texture_label']?.toString() ?? 'N/A'),
           _soilRow(Icons.science_rounded, 'pH Tanah',
-              soil['ph'] != null ? soil['ph'].toString() : 'N/A'),
+              soil['ph_h2o'] != null ? soil['ph_h2o'].toString() : 'N/A'),
           _soilRow(Icons.water_drop_rounded, 'Drainase',
-              soil['drainage']?.toString() ?? 'N/A'),
+              soil['drainage_label']?.toString() ?? 'N/A'),
           _soilRow(Icons.grass_rounded, 'Karbon Organik',
-              soil['oc'] != null ? '${soil['oc']}%' : 'N/A'),
+              soil['organic_carbon_pct'] != null
+                  ? '${soil['organic_carbon_pct']}%'
+                  : 'N/A'),
           const SizedBox(height: 2),
           Text(
-            'Kelengkapan data: ${soil['completeness'] ?? 'unknown'}',
+            'SMU ${soil['smu_id'] ?? '-'} • Kelengkapan data: '
+            '${soil['data_completeness'] ?? 'unknown'}',
             style: TextStyle(
               fontSize: 10,
               color: Colors.grey.shade600,
@@ -290,6 +297,65 @@ class _HwsdCardState extends State<HwsdCard> {
     final rawScores = hwsd['scores'];
     if (rawScores == null) return [];
     return List<Map<String, dynamic>>.from(rawScores as List);
+  }
+
+  /// Data dianggap tidak lengkap bila kelengkapan tanah bukan "full"
+  /// atau ada komoditas yang dihitung dengan data parsial.
+  bool _dataIncomplete(
+      Map<String, dynamic>? soil, List<Map<String, dynamic>> scores) {
+    if (soil == null) return true;
+    if ((soil['data_completeness'] ?? '').toString() != 'full') return true;
+    for (final s in scores) {
+      if (s['data_sufficient'] == false) return true;
+    }
+    return false;
+  }
+
+  Widget _buildDataWarning(
+      Map<String, dynamic>? soil, List<Map<String, dynamic>> scores) {
+    final missing = <String>{};
+    for (final s in scores) {
+      final params = s['parameters'] as List<dynamic>? ?? [];
+      for (final p in params) {
+        if (p is Map && p['value'] == null && p['parameter'] != 'Drainase') {
+          missing.add('${p['parameter']}');
+        }
+      }
+    }
+    final completeness = soil?['data_completeness'] ?? 'tidak diketahui';
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF3E0),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFFFB74D)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.warning_amber_rounded,
+              size: 15, color: Color(0xFFE65100)),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              missing.isEmpty
+                  ? 'Kepastian data terbatas (kelengkapan: $completeness) — '
+                      'skor bersifat perkiraan.'
+                  : 'Data tidak lengkap: ${missing.join(', ')} tidak tersedia '
+                      'dan diasumsikan S2 oleh mesin penilai — skor bersifat '
+                      'perkiraan.',
+              style: const TextStyle(
+                fontSize: 10.5,
+                color: Color(0xFF8D6E63),
+                height: 1.35,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   String _getSuitabilityLabel(String overall) {

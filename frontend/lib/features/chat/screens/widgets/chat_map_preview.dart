@@ -142,7 +142,7 @@ class ChatMapPreview extends StatelessWidget {
                 const SizedBox(width: 4),
                 Expanded(
                   child: Text(
-                    '${soil['texture'] ?? '-'} • pH ${soil['ph'] ?? '-'} • ${soil['drainage'] ?? '-'}',
+                    '${soil['texture_label'] ?? '-'} • pH ${soil['ph_h2o'] ?? '-'} • ${soil['drainage_label'] ?? '-'}',
                     style: TextStyle(
                       fontSize: 11,
                       color: AppTheme.mutedForeground,
@@ -174,7 +174,7 @@ class ChatMapPreview extends StatelessWidget {
                         style: const TextStyle(fontSize: 12)),
                     const SizedBox(width: 2),
                     Text(
-                      '${score['crop'] ?? '-'}: ${score['overall'] ?? '-'}',
+                      '${score['crop_name'] ?? '-'}: ${score['overall'] ?? '-'}',
                       style: TextStyle(
                         fontSize: 10,
                         fontWeight: FontWeight.w600,
