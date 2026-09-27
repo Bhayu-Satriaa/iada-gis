@@ -26,10 +26,9 @@ class MainScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final currentIndex = ref.watch(currentTabProvider);
 
-    final List<Widget> screens = [
-      const ChatScreens(),
-      const MapScreen(),
-      const _DataScreen(),
+    const List<Widget> screens = [
+      ChatScreens(),
+      MapScreen(),
     ];
 
     return Scaffold(
@@ -61,41 +60,6 @@ class MainScreen extends ConsumerWidget {
               icon: Icon(Icons.map_outlined),
               activeIcon: Icon(Icons.map),
               label: 'Peta',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.analytics_outlined),
-              activeIcon: Icon(Icons.analytics),
-              label: 'Data',
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _DataScreen extends StatelessWidget {
-  const _DataScreen();
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Data')),
-      body: const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.analytics, size: 64, color: Colors.grey),
-            SizedBox(height: 16),
-            Text(
-              'Data Pertanian',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-            ),
-            SizedBox(height: 8),
-            Text(
-              'Halaman ini akan menampilkan\nstatistik dan data pertanian',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey),
             ),
           ],
         ),
