@@ -18,8 +18,8 @@ from typing import Optional, Dict, Any
 from dataclasses import dataclass, field
 
 import numpy as np
-import rasterio
-from rasterio.transform import rowcol
+
+from app.services.bil_reader import BilRaster
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ class HWSDService:
     """
 
     def __init__(self):
-        self._raster_src: Optional[rasterio.DatasetReader] = None
+        self._raster_src: Optional[BilRaster] = None
         self._layers_cache: Optional[Dict[int, list]] = None
         self._id_col_layers: Optional[str] = None
         self._initialized = False
@@ -151,8 +151,13 @@ class HWSDService:
     def _init_raster(self):
         if not os.path.exists(RASTER_PATH):
             raise FileNotFoundError(f"File raster tidak ditemukan: {RASTER_PATH}")
-        self._raster_src = rasterio.open(RASTER_PATH)
-        logger.info(f"Raster HWSD terbuka: bounds={self._raster_src.bounds}")
+        self._raster_src = BilRaster(RASTER_PATH)
+        self._raster_src.open()
+        logger.info(
+            f"Raster HWSD terbuka: bounds="
+            f"({self._raster_src.left:.4f}, {self._raster_src.bottom:.4f}, "
+            f"{self._raster_src.right:.4f}, {self._raster_src.top:.4f})"
+        )
 
     def _load_db_cache(self):
         """Load data: SQLite cache (prioritas) → pyodbc MDB (fallback)"""
@@ -278,20 +283,10 @@ class HWSDService:
         """Baca nilai piksel raster pada koordinat (lat, lon) → SMU_ID"""
         try:
             src = self._raster_src
-            bounds = src.bounds
-            if not (bounds.left <= lon <= bounds.right and bounds.bottom <= lat <= bounds.top):
+            if src is None:
                 return None
-
-            row, col = rowcol(src.transform, lon, lat)
-            data = src.read(1, window=rasterio.windows.Window(col, row, 1, 1))
-            val = data[0, 0]
-
-            if src.nodata is not None and val == src.nodata:
-                return None
-            if val <= 0:
-                return None
-
-            return int(val)
+            # value_at() sudah menangani bounds, NODATA, dan nilai <= 0
+            return src.value_at(lat, lon)
         except Exception as e:
             logger.warning(f"Gagal baca raster di ({lat}, {lon}): {e}")
             return None
@@ -390,7 +385,7 @@ class HWSDService:
 
     def __del__(self):
         """Tutup raster saat service dihancurkan"""
-        if self._raster_src and not self._raster_src.closed:
+        if self._raster_src is not None:
             self._raster_src.close()
 
 
