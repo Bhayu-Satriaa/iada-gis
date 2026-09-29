@@ -1,12 +1,89 @@
-import 'package:flutter/material.dart';
 import 'dart:convert';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:frontend/app/theme.dart';
 import 'package:frontend/app/chat_map_provider.dart';
 import 'package:frontend/features/map/providers/map_providers.dart';
+import 'package:frontend/features/map/screens/widgets/score_chip_row.dart';
+import 'package:frontend/features/map/screens/widgets/map_legend_card.dart';
 import 'package:frontend/features/map/screens/widgets/scoring_detail_sheet.dart';
+
+/// Satu zona kawasan pertanian: geometri + atribut tanah (kolom properties).
+class _Zone {
+  final List<LatLng> points;
+  final Map<String, dynamic> props;
+  const _Zone(this.points, this.props);
+
+  /// Kelas kesesuaian untuk komoditas tertentu, atau null bila tanpa data.
+  String? soilClass(String crop) {
+    final s = props['scores'];
+    if (s is Map) {
+      final v = s[crop];
+      if (v != null) return v.toString();
+    }
+    return null;
+  }
+}
+
+/// Basemap yang bisa dipilih dari menu.
+class _Basemap {
+  final String label;
+  final String url;
+  final List<String> subdomains;
+  final String attribution;
+  const _Basemap(this.label, this.url, this.attribution,
+      {this.subdomains = const []});
+}
+
+const Map<String, _Basemap> kBasemaps = {
+  // CARTO sengaja TIDAK dipakai: tile-nya kini mengembalikan gambar
+  // bertuliskan "API KEY REQUIRED". Semua sumber di bawah tanpa kunci.
+  'terang': _Basemap(
+    'Peta Terang',
+    'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+    '© Esri, HERE, Garmin, OpenStreetMap',
+  ),
+  'gelap': _Basemap(
+    'Peta Gelap',
+    'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+    '© Esri, HERE, Garmin, OpenStreetMap',
+  ),
+  'satelit': _Basemap(
+    'Citra Satelit',
+    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    '© Esri, Maxar, Earthstar Geographics',
+  ),
+  'relief': _Basemap(
+    'Relief',
+    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}',
+    '© Esri, Maxar, Earthstar Geographics',
+  ),
+  'natgeo': _Basemap(
+    'NatGeo',
+    'https://server.arcgisonline.com/ArcGIS/rest/services/NatGeo_World_Map/MapServer/tile/{z}/{y}/{x}',
+    '© National Geographic, Esri',
+  ),
+  'topografi': _Basemap(
+    'Topografi',
+    'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+    '© OpenTopoMap (CC-BY-SA) · © OpenStreetMap',
+    subdomains: ['a', 'b', 'c'],
+  ),
+  'jalan': _Basemap(
+    'Peta Jalan',
+    'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    '© OpenStreetMap contributors',
+  ),
+};
+
+const Map<String, String> kCrops = {
+  'padi': 'Padi',
+  'jagung': 'Jagung',
+  'kelapa_sawit': 'Kelapa Sawit',
+  'kedelai': 'Kedelai',
+};
 
 class MapScreen extends ConsumerStatefulWidget {
   const MapScreen({super.key});
@@ -18,6 +95,17 @@ class MapScreen extends ConsumerStatefulWidget {
 class _MapScreenState extends ConsumerState<MapScreen> {
   final MapController _mapController = MapController();
 
+  int? _highlightedIndex;
+  Map<String, dynamic>? _pickedMarkerResult;
+  List<_Zone> _lastZones = const [];
+
+  /// Komoditas yang mewarnai peta.
+  String _crop = 'padi';
+
+  /// Basemap aktif. Peta Gelap dipakai sebagai default karena zona berwarna
+  /// (S1–N) paling kontras di atas latar gelap.
+  String _basemap = 'gelap';
+
   @override
   void initState() {
     super.initState();
@@ -26,234 +114,264 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     });
   }
 
-  List<Polygon> _buildPolygons(List<Map<String, dynamic>> layers) {
-    List<Polygon> polygons = [];
-    for (var layer in layers) {
+  // ── Parsing zona ──────────────────────────────────────────────────────────
+
+  List<_Zone> _zonesFromLayers(List<Map<String, dynamic>> layers) {
+    final out = <_Zone>[];
+    for (final layer in layers) {
       try {
-        // Parse GeoJSON from 'geojson' field (string from PostGIS)
-        final geojsonStr = layer['geojson'] as String?;
-        if (geojsonStr == null) continue;
-        
-        final geojson = _parseJson(geojsonStr);
-        if (geojson == null) continue;
-        
-        final type = geojson['type'] as String?;
-        final coordinates = geojson['coordinates'] as List<dynamic>?;
-        if (coordinates == null) continue;
-        
-        if (type == 'Polygon') {
-          // Polygon: [[ring1], [ring2], ...]
-          final outerRing = coordinates[0] as List<dynamic>;
-          List<LatLng> points = [];
-          for (var coord in outerRing) {
-            if (coord is List && coord.length >= 2) {
-              points.add(LatLng(
-                (coord[1] as num).toDouble(),
-                (coord[0] as num).toDouble(),
-              ));
-            }
-          }
-          if (points.length >= 3) {
-            polygons.add(Polygon(
-              points: points,
-              borderColor: AppTheme.primary,
-              color: AppTheme.primary.withOpacity(0.2),
-              borderStrokeWidth: 1.5,
-            ));
-          }
-        } else if (type == 'MultiPolygon') {
-          // MultiPolygon: [[[ring1], [ring2]], [[ring1]]]
-          for (var polygonCoords in coordinates) {
-            if (polygonCoords is List && polygonCoords.isNotEmpty) {
-              final outerRing = polygonCoords[0] as List<dynamic>;
-              List<LatLng> points = [];
-              for (var coord in outerRing) {
-                if (coord is List && coord.length >= 2) {
-                  points.add(LatLng(
-                    (coord[1] as num).toDouble(),
-                    (coord[0] as num).toDouble(),
-                  ));
-                }
-              }
-              if (points.length >= 3) {
-                polygons.add(Polygon(
-                  points: points,
-                  borderColor: AppTheme.primary,
-                  color: AppTheme.primary.withOpacity(0.2),
-                  borderStrokeWidth: 1.5,
-                ));
-              }
-            }
-          }
-        }
+        final raw = layer['geojson'] as String?;
+        if (raw == null) continue;
+        final geo = jsonDecode(raw) as Map<String, dynamic>;
+        final props = (layer['properties'] as Map?)?.cast<String, dynamic>() ??
+            const <String, dynamic>{};
+        out.addAll(_zonesFromGeometry(geo, props));
       } catch (_) {}
     }
-    return polygons;
+    return out;
   }
 
-  Map<String, dynamic>? _parseJson(String str) {
-    try {
-      final decoded = str;
-      // Simple JSON parse for GeoJSON
-      if (decoded.startsWith('{')) {
-        // Use dart:convert
-        return _decodeJson(decoded);
-      }
-    } catch (_) {}
-    return null;
-  }
-
-  Map<String, dynamic>? _decodeJson(String str) {
-    try {
-      return jsonDecode(str) as Map<String, dynamic>;
-    } catch (_) {}
-    return null;
-  }
-
-  List<Polygon> _buildPolygonsFromGeoJson(Map<String, dynamic> geoJson) {
-    List<Polygon> polygons = [];
+  List<_Zone> _zonesFromGeoJson(Map<String, dynamic> geoJson) {
     final features = geoJson['features'] as List<dynamic>? ?? [];
-    
-    for (var feature in features) {
+    final out = <_Zone>[];
+    for (final f in features) {
       try {
-        final geometry = feature['geometry'] as Map<String, dynamic>?;
-        if (geometry == null) continue;
-        
-        final type = geometry['type'] as String?;
-        final coordinates = geometry['coordinates'] as List<dynamic>?;
-        if (coordinates == null) continue;
-        
-        if (type == 'Polygon') {
-          final outerRing = coordinates[0] as List<dynamic>;
-          List<LatLng> points = [];
-          for (var coord in outerRing) {
-            if (coord is List && coord.length >= 2) {
-              points.add(LatLng(
-                (coord[1] as num).toDouble(),
-                (coord[0] as num).toDouble(),
-              ));
-            }
-          }
-          if (points.length >= 3) {
-            polygons.add(Polygon(
-              points: points,
-              borderColor: AppTheme.primary,
-              color: AppTheme.primary.withOpacity(0.2),
-              borderStrokeWidth: 1.5,
-            ));
-          }
-        } else if (type == 'MultiPolygon') {
-          for (var polygonCoords in coordinates) {
-            if (polygonCoords is List && polygonCoords.isNotEmpty) {
-              final outerRing = polygonCoords[0] as List<dynamic>;
-              List<LatLng> points = [];
-              for (var coord in outerRing) {
-                if (coord is List && coord.length >= 2) {
-                  points.add(LatLng(
-                    (coord[1] as num).toDouble(),
-                    (coord[0] as num).toDouble(),
-                  ));
-                }
-              }
-              if (points.length >= 3) {
-                polygons.add(Polygon(
-                  points: points,
-                  borderColor: AppTheme.primary,
-                  color: AppTheme.primary.withOpacity(0.2),
-                  borderStrokeWidth: 1.5,
-                ));
-              }
-            }
-          }
-        }
+        final m = f as Map;
+        final geo = m['geometry'] as Map<String, dynamic>?;
+        if (geo == null) continue;
+        final props = (m['properties'] as Map?)?.cast<String, dynamic>() ??
+            const <String, dynamic>{};
+        out.addAll(_zonesFromGeometry(geo, props));
       } catch (_) {}
     }
-    return polygons;
+    return out;
   }
 
-  void _fitPolygons(List<Polygon> polygons) {
-    if (polygons.isEmpty) return;
-    
-    double minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
-    for (var polygon in polygons) {
-      for (var point in polygon.points) {
-        if (point.latitude < minLat) minLat = point.latitude;
-        if (point.latitude > maxLat) maxLat = point.latitude;
-        if (point.longitude < minLon) minLon = point.longitude;
-        if (point.longitude > maxLon) maxLon = point.longitude;
+  List<_Zone> _zonesFromGeometry(
+    Map<String, dynamic> geometry,
+    Map<String, dynamic> props,
+  ) {
+    final type = geometry['type'] as String?;
+    final coords = geometry['coordinates'] as List<dynamic>?;
+    if (coords == null) return [];
+
+    final rings = <List<dynamic>>[];
+    if (type == 'Polygon') {
+      rings.add(coords);
+    } else if (type == 'MultiPolygon') {
+      for (final p in coords) {
+        if (p is List && p.isNotEmpty) rings.add(p);
       }
     }
-    
-    final center = LatLng(
-      (minLat + maxLat) / 2,
-      (minLon + maxLon) / 2,
+
+    final out = <_Zone>[];
+    for (final ring in rings) {
+      final outer = ring.isNotEmpty ? ring[0] as List<dynamic> : null;
+      if (outer == null) continue;
+      final pts = <LatLng>[];
+      for (final c in outer) {
+        if (c is List && c.length >= 2) {
+          pts.add(LatLng(
+            (c[1] as num).toDouble(),
+            (c[0] as num).toDouble(),
+          ));
+        }
+      }
+      if (pts.length >= 3) out.add(_Zone(pts, props));
+    }
+    return out;
+  }
+
+  // ── Pewarnaan ─────────────────────────────────────────────────────────────
+
+  /// Basemap yang gelap/ramai perlu zona lebih pekat supaya warna terbaca.
+  bool get _darkBase => _basemap == 'gelap' || _basemap == 'satelit';
+
+  Color _zoneFill(_Zone z, String crop, bool highlighted) {
+    final cls = z.soilClass(crop);
+    final base = cls == null ? const Color(0xFF94A3B8) : scoreColor(cls);
+    final fill = _darkBase
+        ? (highlighted ? 0.78 : 0.58)
+        : (highlighted ? 0.55 : 0.38);
+    return base.withOpacity(fill);
+  }
+
+  Color _zoneBorder(_Zone z, String crop, bool highlighted) {
+    if (highlighted) return AppTheme.accent;
+    final cls = z.soilClass(crop);
+    return cls == null ? const Color(0xFF64748B) : scoreColor(cls);
+  }
+
+  Polygon _polygonOf(_Zone z, {required bool highlighted}) {
+    return Polygon(
+      points: z.points,
+      color: _zoneFill(z, _crop, highlighted),
+      borderColor: _zoneBorder(z, _crop, highlighted),
+      borderStrokeWidth: highlighted ? 3 : (_darkBase ? 1.3 : 0.8),
     );
-    
-    // Hitung zoom berdasarkan bounds
-    final latDiff = maxLat - minLat;
-    final lonDiff = maxLon - minLon;
-    final maxDiff = latDiff > lonDiff ? latDiff : lonDiff;
-    double zoom = 10;
-    if (maxDiff > 1) zoom = 9;
-    else if (maxDiff > 0.5) zoom = 10;
-    else if (maxDiff > 0.2) zoom = 11;
-    else if (maxDiff > 0.1) zoom = 12;
-    else zoom = 13;
-    
+  }
+
+  List<Polygon> _renderZones(List<_Zone> zones) {
+    final idx = _highlightedIndex;
+    return [
+      for (int i = 0; i < zones.length; i++)
+        _polygonOf(zones[i], highlighted: i == idx),
+    ];
+  }
+
+  // ── Kamera & geometri ─────────────────────────────────────────────────────
+
+  Map<String, double>? _boundsOf(List<_Zone> zones) {
+    double minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
+    bool any = false;
+    for (final z in zones) {
+      for (final p in z.points) {
+        any = true;
+        if (p.latitude < minLat) minLat = p.latitude;
+        if (p.latitude > maxLat) maxLat = p.latitude;
+        if (p.longitude < minLon) minLon = p.longitude;
+        if (p.longitude > maxLon) maxLon = p.longitude;
+      }
+    }
+    if (!any) return null;
+    return {
+      'minLat': minLat,
+      'maxLat': maxLat,
+      'minLon': minLon,
+      'maxLon': maxLon,
+    };
+  }
+
+  void _fitZones(List<_Zone> zones) {
+    if (zones.isEmpty) return;
+    final b = _boundsOf(zones);
+    if (b == null) return;
+    final dLat = b['maxLat']! - b['minLat']!;
+    final dLon = b['maxLon']! - b['minLon']!;
+    final maxDiff = dLat > dLon ? dLat : dLon;
+    double zoom = 13;
+    if (maxDiff > 1) {
+      zoom = 9;
+    } else if (maxDiff > 0.5) {
+      zoom = 10;
+    } else if (maxDiff > 0.2) {
+      zoom = 11;
+    } else if (maxDiff > 0.1) {
+      zoom = 12;
+    }
     try {
-      _mapController.move(center, zoom);
+      _mapController.move(
+        LatLng((b['minLat']! + b['maxLat']!) / 2,
+            (b['minLon']! + b['maxLon']!) / 2),
+        zoom,
+      );
     } catch (_) {}
   }
 
-  List<Marker> _buildMarkers(List<Map<String, dynamic>> scoringData) {
-    List<Marker> markers = [];
-    for (var data in scoringData) {
-      final lat = data['lat'] as double?;
-      final lon = data['lon'] as double?;
-      final result = data['result'] as Map<String, dynamic>?;
-      if (lat != null && lon != null && result != null) {
-        final scores = result['scores'] as List<dynamic>? ?? [];
-        final primaryScore = scores.isNotEmpty ? scores[0] : null;
-        final color = _scoreColor(primaryScore?['overall'] ?? 'N');
-        markers.add(Marker(
-          point: LatLng(lat, lon),
-          width: 36,
-          height: 36,
-          child: GestureDetector(
-            onTap: () => _showScoringDetail(result),
-            child: Container(
-              decoration: BoxDecoration(
-                color: color,
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white, width: 3),
-                boxShadow: [
-                  BoxShadow(
-                    color: color.withOpacity(0.4),
-                    blurRadius: 8,
-                    spreadRadius: 2,
-                  ),
-                ],
-              ),
-              child: Center(
-                child: Text(primaryScore?['emoji'] ?? '❓',
-                    style: const TextStyle(fontSize: 16)),
-              ),
+  bool _pointInPolygon(LatLng p, List<LatLng> poly) {
+    bool inside = false;
+    for (int i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      final xi = poly[i].longitude, yi = poly[i].latitude;
+      final xj = poly[j].longitude, yj = poly[j].latitude;
+      if (((yi > p.latitude) != (yj > p.latitude)) &&
+          (p.longitude < (xj - xi) * (p.latitude - yi) / (yj - yi) + xi)) {
+        inside = !inside;
+      }
+    }
+    return inside;
+  }
+
+  void _highlightZoneAt(LatLng point) {
+    int? found;
+    for (int i = 0; i < _lastZones.length; i++) {
+      final pts = _lastZones[i].points;
+      double minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
+      for (final p in pts) {
+        if (p.latitude < minLat) minLat = p.latitude;
+        if (p.latitude > maxLat) maxLat = p.latitude;
+        if (p.longitude < minLon) minLon = p.longitude;
+        if (p.longitude > maxLon) maxLon = p.longitude;
+      }
+      if (point.latitude < minLat ||
+          point.latitude > maxLat ||
+          point.longitude < minLon ||
+          point.longitude > maxLon) {
+        continue;
+      }
+      if (_pointInPolygon(point, pts)) {
+        found = i;
+        break;
+      }
+    }
+    if (found != _highlightedIndex) {
+      setState(() => _highlightedIndex = found);
+    }
+  }
+
+  // ── Marker ────────────────────────────────────────────────────────────────
+
+  List<Marker> _buildMarkers(
+    List<Map<String, dynamic>> saved, {
+    Map<String, dynamic>? extra,
+    double? extraLat,
+    double? extraLon,
+  }) {
+    final pts = <Map<String, dynamic>>[...saved];
+    if (extra != null && extraLat != null && extraLon != null) {
+      pts.add({'lat': extraLat, 'lon': extraLon, 'result': extra});
+    }
+
+    final markers = <Marker>[];
+    for (final d in pts) {
+      final lat = (d['lat'] as num?)?.toDouble();
+      final lon = (d['lon'] as num?)?.toDouble();
+      final result = d['result'] as Map<String, dynamic>?;
+      if (lat == null || lon == null || result == null) continue;
+
+      final scores = result['scores'] as List<dynamic>? ?? [];
+      final first = scores.isNotEmpty ? scores.first : null;
+      final overall = first is Map ? first['overall']?.toString() : null;
+      final color = scoreColor(overall);
+
+      markers.add(Marker(
+        point: LatLng(lat, lon),
+        width: 32,
+        height: 32,
+        child: GestureDetector(
+          onTap: () => setState(() => _pickedMarkerResult = result),
+          child: Container(
+            decoration: BoxDecoration(
+              color: color,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 2.5),
+              boxShadow: [
+                BoxShadow(
+                  color: color.withOpacity(0.45),
+                  blurRadius: 8,
+                  spreadRadius: 1.5,
+                ),
+              ],
+            ),
+            child: Center(
+              child: Text(scoreEmoji(overall),
+                  style: const TextStyle(fontSize: 13)),
             ),
           ),
-        ));
-      }
+        ),
+      ));
     }
     return markers;
   }
+
+  // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
     final layersState = ref.watch(layersProvider);
     final scoringState = ref.watch(scoringProvider);
-    final scoringMarkers = ref.watch(scoringMarkersProvider);
+    final savedMarkers = ref.watch(scoringMarkersProvider);
     final chatMapData = ref.watch(chatMapProvider);
 
-    // Auto-save scoring result to markers
     ref.listen<ScoringState>(scoringProvider, (prev, next) {
       if (next.result != null && !next.isLoading && next.lat != null) {
         final exists = ref
@@ -269,88 +387,80 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       }
     });
 
-    // Build polygons dari layers API
-    List<Polygon> polygons = _buildPolygons(layersState.layers);
-    List<Marker> markers = _buildMarkers(scoringMarkers);
-
-    // Tambah polygon dari chat data (jika ada)
+    List<_Zone> zones = _zonesFromLayers(layersState.layers);
     if (chatMapData.geoJson != null) {
-      final chatPolygons = _buildPolygonsFromGeoJson(chatMapData.geoJson!);
-      if (chatPolygons.isNotEmpty) {
-        polygons = chatPolygons; // Ganti dengan polygon dari chat
-        
-        // Auto-center map ke polygon dari chat
+      final chatZones = _zonesFromGeoJson(chatMapData.geoJson!);
+      if (chatZones.isNotEmpty) {
+        zones = chatZones;
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          _fitPolygons(chatPolygons);
+          _fitZones(chatZones);
         });
       }
-      
-      // Tambah marker HWSD dari chat
-      if (chatMapData.hwsdResult != null) {
-        final hwsd = chatMapData.hwsdResult!;
-        final lat = (hwsd['lat'] as num?)?.toDouble();
-        final lon = (hwsd['lon'] as num?)?.toDouble();
-        if (lat != null && lon != null) {
-          final scores = hwsd['scores'] as List<dynamic>? ?? [];
-          final primaryScore = scores.isNotEmpty ? scores[0] : null;
-          final color = _scoreColor(primaryScore?['overall'] ?? 'N');
-          markers.add(Marker(
-            point: LatLng(lat, lon),
-            width: 40,
-            height: 40,
-            child: GestureDetector(
-              onTap: () => _showScoringDetail(hwsd),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: color,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 3),
-                  boxShadow: [
-                    BoxShadow(
-                      color: color.withOpacity(0.4),
-                      blurRadius: 10,
-                      spreadRadius: 3,
-                    ),
-                  ],
-                ),
-                child: Center(
-                  child: Text(primaryScore?['emoji'] ?? '❓',
-                      style: const TextStyle(fontSize: 18)),
-                ),
-              ),
-            ),
-          ));
-        }
-      }
     }
+    _lastZones = zones;
+    final polygons = _renderZones(zones);
+
+    final chatHwsd = chatMapData.hwsdResult;
+    final markers = _buildMarkers(
+      savedMarkers,
+      extra: chatHwsd,
+      extraLat: (chatHwsd?['lat'] as num?)?.toDouble(),
+      extraLon: (chatHwsd?['lon'] as num?)?.toDouble(),
+    );
+
+    final displayResult =
+        _pickedMarkerResult ?? scoringState.result ?? chatHwsd;
+    final bm = kBasemaps[_basemap] ?? kBasemaps['terang']!;
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Peta Pertanian'),
         actions: [
-          if (chatMapData.geoJson != null)
-            IconButton(
-              icon: const Icon(Icons.layers),
-              onPressed: () {
-                ref.read(chatMapProvider.notifier).clear();
-              },
-              tooltip: 'Tampilkan Semua Layer',
-            ),
-          if (polygons.isNotEmpty)
-            IconButton(
-              icon: const Icon(Icons.fit_screen),
-              onPressed: () => _fitAllPolygons(polygons),
-              tooltip: 'Lihat Semua',
-            ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: () {
-              ref.read(layersProvider.notifier).fetchLayers();
-              ref.read(scoringMarkersProvider.notifier).clear();
-              ref.read(scoringProvider.notifier).clear();
-              ref.read(chatMapProvider.notifier).clear();
-            },
-            tooltip: 'Refresh',
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            tooltip: 'Menu peta',
+            onSelected: (v) => _onMenu(v, zones),
+            itemBuilder: (context) => [
+              if (zones.isNotEmpty)
+                const PopupMenuItem(
+                  value: 'fit',
+                  child: _MenuRow(icon: Icons.fit_screen, label: 'Lihat Semua'),
+                ),
+              if (chatMapData.geoJson != null)
+                const PopupMenuItem(
+                  value: 'layers',
+                  child: _MenuRow(icon: Icons.layers, label: 'Semua Layer'),
+                ),
+              const PopupMenuDivider(),
+              const PopupMenuItem<String>(
+                value: null,
+                enabled: false,
+                child: _MenuLabel('Warnai peta menurut'),
+              ),
+              ...kCrops.entries.map((e) => CheckedPopupMenuItem<String>(
+                    value: 'crop:${e.key}',
+                    checked: _crop == e.key,
+                    child: Text(e.value,
+                        style: const TextStyle(fontSize: 13.5)),
+                  )),
+              const PopupMenuDivider(),
+              const PopupMenuItem<String>(
+                value: null,
+                enabled: false,
+                child: _MenuLabel('Tampilan peta'),
+              ),
+              ...kBasemaps.entries.map((e) => CheckedPopupMenuItem<String>(
+                    value: 'base:${e.key}',
+                    checked: _basemap == e.key,
+                    child: Text(e.value.label,
+                        style: const TextStyle(fontSize: 13.5)),
+                  )),
+              const PopupMenuDivider(),
+              const PopupMenuItem(
+                value: 'refresh',
+                child: _MenuRow(icon: Icons.refresh, label: 'Muat Ulang'),
+              ),
+            ],
           ),
         ],
       ),
@@ -365,6 +475,8 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                 flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
               ),
               onTap: (_, point) {
+                _highlightZoneAt(point);
+                setState(() => _pickedMarkerResult = null);
                 ref
                     .read(scoringProvider.notifier)
                     .fetchScoring(point.latitude, point.longitude);
@@ -372,87 +484,103 @@ class _MapScreenState extends ConsumerState<MapScreen> {
             ),
             children: [
               TileLayer(
-                urlTemplate:
-                    'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                urlTemplate: bm.url,
+                subdomains: bm.subdomains,
                 userAgentPackageName: 'com.example.frontend',
               ),
               PolygonLayer(polygons: polygons),
               MarkerLayer(markers: markers),
+              RichAttributionWidget(
+                alignment: AttributionAlignment.bottomLeft,
+                attributions: [TextSourceAttribution(bm.attribution)],
+              ),
             ],
           ),
 
-          // Info panel
           Positioned(
             top: 12,
             left: 12,
-            right: 12,
-            child: _buildInfoPanel(
-                layersState.isLoading, layersState.layers.length, scoringMarkers.length),
-          ),
-
-          // Legend
-          Positioned(
-            bottom: scoringState.result != null ? 180 : 16,
-            left: 12,
-            child: _buildLegend(),
-          ),
-
-          // Loading indicator
-          if (scoringState.isLoading)
-            Positioned(
-              bottom: scoringState.result != null ? 180 : 16,
-              right: 12,
-              child: _buildLoadingChip(),
+            child: _buildInfoPill(
+              isLoading: scoringState.isLoading,
+              zoneCount: zones.length,
+              markerCount: markers.length,
             ),
+          ),
 
-          // Scoring result card
-          if (scoringState.result != null)
-            Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
-              child: _buildScoringMiniCard(scoringState.result!),
+          Positioned(
+            top: 12,
+            right: 12,
+            child: MapLegendCard(
+              selectedResult: displayResult,
+              cropLabel: kCrops[_crop] ?? '',
+              zones: zones
+                  .map((z) => z.soilClass(_crop))
+                  .whereType<String>()
+                  .toList(),
+            ),
+          ),
+
+          // Panel detail. WAJIB dibungkus Positioned.fill: DraggableScrollableSheet
+          // menghitung posisinya dari tinggi constraint yang ia terima. Sebagai
+          // anak Stack biasa ia diberi constraint longgar, sehingga panel salah
+          // hitung dan muncul di ATAS layar menutupi peta.
+          if (displayResult != null)
+            Positioned.fill(
+              child: ScoringDetailSheet(scoringData: displayResult),
             ),
         ],
       ),
     );
   }
 
-  void _fitAllPolygons(List<Polygon> polygons) {
-    if (polygons.isEmpty) return;
-    double minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
-    for (var polygon in polygons) {
-      for (var point in polygon.points) {
-        if (point.latitude < minLat) minLat = point.latitude;
-        if (point.latitude > maxLat) maxLat = point.latitude;
-        if (point.longitude < minLon) minLon = point.longitude;
-        if (point.longitude > maxLon) maxLon = point.longitude;
-      }
+  void _onMenu(String value, List<_Zone> zones) {
+    if (value.startsWith('crop:')) {
+      setState(() => _crop = value.substring(5));
+      return;
     }
-    _mapController.move(
-      LatLng((minLat + maxLat) / 2, (minLon + maxLon) / 2),
-      11.0,
-    );
+    if (value.startsWith('base:')) {
+      setState(() => _basemap = value.substring(5));
+      return;
+    }
+    switch (value) {
+      case 'fit':
+        _fitZones(zones);
+        break;
+      case 'layers':
+        ref.read(chatMapProvider.notifier).clear();
+        setState(() {
+          _pickedMarkerResult = null;
+          _highlightedIndex = null;
+        });
+        break;
+      case 'refresh':
+        ref.read(layersProvider.notifier).fetchLayers();
+        ref.read(scoringMarkersProvider.notifier).clear();
+        ref.read(scoringProvider.notifier).clear();
+        ref.read(chatMapProvider.notifier).clear();
+        setState(() {
+          _pickedMarkerResult = null;
+          _highlightedIndex = null;
+        });
+        break;
+    }
   }
 
-  void _showScoringDetail(Map<String, dynamic> result) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => ScoringDetailSheet(scoringData: result),
-    );
-  }
-
-  Widget _buildInfoPanel(bool isLoading, int layerCount, int markerCount) {
+  Widget _buildInfoPill({
+    required bool isLoading,
+    required int zoneCount,
+    required int markerCount,
+  }) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      width: 148,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
+        color: AppTheme.card,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.border),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.08),
+            color: Colors.black.withOpacity(0.10),
             blurRadius: 10,
             offset: const Offset(0, 2),
           ),
@@ -460,238 +588,80 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       ),
       child: Row(
         children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: AppTheme.primary.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(Icons.map, color: AppTheme.primary, size: 18),
-          ),
-          const SizedBox(width: 10),
+          if (isLoading)
+            SizedBox(
+              width: 13,
+              height: 13,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: AppTheme.primary,
+              ),
+            )
+          else
+            Icon(Icons.touch_app, size: 14, color: AppTheme.primary),
+          const SizedBox(width: 6),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  'Tap di peta untuk analisis tanah',
+                  isLoading ? 'Menganalisis...' : 'Tap peta: analisis',
                   style: TextStyle(
+                    fontSize: 10.5,
                     fontWeight: FontWeight.w600,
                     color: AppTheme.foreground,
-                    fontSize: 13,
                   ),
                 ),
                 Text(
-                  '$layerCount kawasan • $markerCount analisis',
+                  '$zoneCount zona · $markerCount analisis',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
+                    fontSize: 9,
                     color: AppTheme.mutedForeground,
-                    fontSize: 11,
                   ),
                 ),
               ],
             ),
           ),
-          if (isLoading)
-            SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: AppTheme.primary,
-              ),
-            ),
         ],
       ),
     );
   }
+}
 
-  Widget _buildLoadingChip() {
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 8),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(
-            width: 14,
-            height: 14,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              color: AppTheme.primary,
-            ),
-          ),
-          const SizedBox(width: 6),
-          Text('Analisis...',
-              style: TextStyle(fontSize: 11, color: AppTheme.mutedForeground)),
-        ],
-      ),
+class _MenuRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  const _MenuRow({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 17, color: AppTheme.mutedForeground),
+        const SizedBox(width: 10),
+        Text(label, style: const TextStyle(fontSize: 13.5)),
+      ],
     );
   }
+}
 
-  Widget _buildScoringMiniCard(Map<String, dynamic> result) {
-    final soil = result['soil_info'] as Map<String, dynamic>?;
-    final scores = result['scores'] as List<dynamic>? ?? [];
+class _MenuLabel extends StatelessWidget {
+  final String text;
+  const _MenuLabel(this.text);
 
-    return GestureDetector(
-      onTap: () => _showScoringDetail(result),
-      child: Container(
-        margin: const EdgeInsets.all(12),
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.12),
-              blurRadius: 16,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (soil != null)
-              Row(
-                children: [
-                  Icon(Icons.landscape, size: 16, color: AppTheme.primary),
-                  const SizedBox(width: 6),
-                  Text(
-                    '${soil['texture_label'] ?? '-'} • pH ${soil['ph_h2o'] ?? '-'}',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: AppTheme.foreground,
-                    ),
-                  ),
-                  const Spacer(),
-                  Text(
-                    '${soil['drainage_label'] ?? '-'}',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: AppTheme.mutedForeground,
-                    ),
-                  ),
-                ],
-              ),
-            const SizedBox(height: 10),
-            Row(
-              children: scores.map<Widget>((score) {
-                final color = _scoreColor(score['overall'] ?? '-');
-                return Expanded(
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 2),
-                    padding: const EdgeInsets.symmetric(vertical: 6),
-                    decoration: BoxDecoration(
-                      color: color.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Column(
-                      children: [
-                        Text(score['emoji'] ?? '❓',
-                            style: const TextStyle(fontSize: 16)),
-                        const SizedBox(height: 2),
-                        Text(
-                          score['crop_name'] ?? '-',
-                          style: TextStyle(
-                            fontSize: 9,
-                            color: AppTheme.mutedForeground,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        Text(
-                          score['overall'] ?? '-',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                            color: color,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              }).toList(),
-            ),
-            const SizedBox(height: 6),
-            Text('Tap untuk detail',
-                style: TextStyle(
-                    fontSize: 10, color: AppTheme.mutedForeground)),
-          ],
-        ),
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text.toUpperCase(),
+      style: TextStyle(
+        fontSize: 10,
+        letterSpacing: 0.5,
+        fontWeight: FontWeight.w700,
+        color: AppTheme.mutedForeground,
       ),
     );
-  }
-
-  Widget _buildLegend() {
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 8),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text('Skor',
-              style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 11,
-                  color: AppTheme.foreground)),
-          const SizedBox(height: 4),
-          _legendDot(Colors.green, 'S1 Sangat Sesuai'),
-          _legendDot(const Color(0xFF8BC34A), 'S2 Cukup Sesuai'),
-          _legendDot(Colors.orange, 'S3 Bersyarat'),
-          _legendDot(Colors.red, 'N Tidak Sesuai'),
-        ],
-      ),
-    );
-  }
-
-  Widget _legendDot(Color color, String label) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 10,
-            height: 10,
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 6),
-          Text(label,
-              style:
-                  TextStyle(fontSize: 10, color: AppTheme.mutedForeground)),
-        ],
-      ),
-    );
-  }
-
-  Color _scoreColor(String score) {
-    switch (score) {
-      case 'S1':
-        return Colors.green;
-      case 'S2':
-        return const Color(0xFF8BC34A);
-      case 'S3':
-        return Colors.orange;
-      case 'N':
-        return Colors.red;
-      default:
-        return Colors.grey;
-    }
   }
 }
