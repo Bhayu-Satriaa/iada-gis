@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:frontend/features/chat/models/chat_message.dart';
@@ -49,6 +53,63 @@ class ApiService {
       return ChatResponse.fromJson(response.data as Map<String, dynamic>);
     } on DioException catch (e) {
       throw Exception('Gagal menghubungi server: ${e.message}');
+    }
+  }
+
+  /// Kirim pesan dan terima jawaban sebagai aliran kejadian (SSE).
+  ///
+  /// Urutan kejadian: `meta` (peta + skor, dikirim sebelum jawaban siap),
+  /// lalu `token` berulang, diakhiri `done` atau `error`.
+  ///
+  /// Dipakai supaya pengguna melihat peta dan teks muncul bertahap, bukan
+  /// menunggu 3-10 detik tanpa umpan balik.
+  Stream<Map<String, dynamic>> streamMessages({
+    required List<ChatMessage> messages,
+    double? userLat,
+    double? userLon,
+  }) async* {
+    final Map<String, dynamic> payload = {
+      'messages': messages.map((msg) => msg.toJson()).toList(),
+      if (userLat != null) 'user_lat': userLat,
+      if (userLon != null) 'user_lon': userLon,
+    };
+
+    final Response<ResponseBody> response;
+    try {
+      response = await _dio.post<ResponseBody>(
+        '${ApiConstants.chatEndpoint}/stream',
+        data: payload,
+        options: Options(
+          responseType: ResponseType.stream,
+          headers: {'Accept': 'text/event-stream'},
+        ),
+      );
+    } on DioException catch (e) {
+      throw Exception('Gagal menghubungi server: ${e.message}');
+    }
+
+    final ResponseBody? badan = response.data;
+    if (badan == null) {
+      throw Exception('Server tidak mengirim data');
+    }
+
+    // Potongan byte bisa terbelah di tengah baris, jadi buffer dulu dan
+    // hanya proses blok yang sudah lengkap (dipisah baris kosong ganda).
+    final sisa = StringBuffer();
+    await for (final Uint8List potongan in badan.stream) {
+      sisa.write(utf8.decode(potongan, allowMalformed: true));
+      final blok = sisa.toString().split('\n\n');
+      sisa
+        ..clear()
+        ..write(blok.removeLast()); // sisakan yang mungkin belum utuh
+      for (final b in blok) {
+        for (final baris in b.split('\n')) {
+          if (!baris.startsWith('data:')) continue;
+          final isi = baris.substring(5).trim();
+          if (isi.isEmpty) continue;
+          yield jsonDecode(isi) as Map<String, dynamic>;
+        }
+      }
     }
   }
 

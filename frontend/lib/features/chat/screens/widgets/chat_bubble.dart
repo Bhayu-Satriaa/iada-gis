@@ -80,7 +80,9 @@ class ChatBubble extends ConsumerWidget {
                         color: Colors.white,
                       ),
                     )
-                  : MarkdownBody(
+                  : (message.isStreaming && message.text.isEmpty)
+                      ? const _MenyusunJawaban()
+                      : MarkdownBody(
                       data: message.text,
                       styleSheet: MarkdownStyleSheet(
                         p: TextStyle(
@@ -279,6 +281,38 @@ class ChatBubble extends ConsumerWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Indikator sementara saat jawaban masih mengalir dari server.
+/// Tanpa ini gelembung bot tampak kosong selama beberapa detik pertama.
+class _MenyusunJawaban extends StatelessWidget {
+  const _MenyusunJawaban();
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 14,
+          height: 14,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            color: AppTheme.primary,
+          ),
+        ),
+        const SizedBox(width: 10),
+        Text(
+          'Menyusun jawaban…',
+          style: TextStyle(
+            fontSize: 13,
+            fontStyle: FontStyle.italic,
+            color: AppTheme.cardForeground.withOpacity(0.7),
+          ),
+        ),
+      ],
     );
   }
 }

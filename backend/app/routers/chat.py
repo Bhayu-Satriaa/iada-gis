@@ -1,6 +1,10 @@
+import asyncio
+import json
+from typing import Dict, List, Optional
+
 from fastapi import APIRouter
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import List, Optional, Dict
 
 from app.services.pipeline_service import pipeline
 
@@ -49,4 +53,69 @@ async def chat(request: ChatRequest):
         citations=result.citations,
         geo_json=result.geo_json,
         hwsd_result=result.hwsd_result,
+    )
+
+
+@router.post("/chat/stream")
+async def chat_stream(request: ChatRequest):
+    """Versi streaming dari /chat (Server-Sent Events).
+
+    Urutan kejadian:
+      {"type":"meta", ...}   peta + skor, dikirim sebelum LLM mulai
+      {"type":"token", ...}  potongan jawaban, seiring dihasilkan
+      {"type":"done", ...}   jawaban utuh + waktu proses
+      {"type":"error", ...}  bila terjadi kegagalan
+
+    Endpoint /chat yang lama tidak diubah, sehingga klien lama tetap jalan.
+    """
+    last_message = request.messages[-1].content if request.messages else ""
+
+    user_location = None
+    if request.user_lat and request.user_lon:
+        user_location = {"lat": request.user_lat, "lon": request.user_lon}
+
+    # Pipeline menulis ke queue; generator di bawah membacanya sambil jalan
+    # sehingga tiap potongan terkirim segera, tanpa menunggu selesai.
+    antrean: asyncio.Queue = asyncio.Queue()
+
+    async def kirim(kejadian: Dict):
+        await antrean.put(kejadian)
+
+    async def jalankan():
+        try:
+            hasil = await pipeline.process(
+                query=last_message,
+                user_location=user_location,
+                on_event=kirim,
+            )
+            await antrean.put({
+                "type": "done",
+                "answer": hasil.answer,
+                "model_used": hasil.model_used,
+                "processing_time_ms": hasil.processing_time_ms,
+            })
+        except Exception as e:  # noqa: BLE001
+            await antrean.put({"type": "error", "message": str(e)})
+        finally:
+            await antrean.put(None)  # penanda aliran selesai
+
+    async def aliran():
+        tugas = asyncio.create_task(jalankan())
+        try:
+            while True:
+                kejadian = await antrean.get()
+                if kejadian is None:
+                    break
+                yield f"data: {json.dumps(kejadian, ensure_ascii=False)}\n\n"
+        finally:
+            await tugas
+
+    return StreamingResponse(
+        aliran(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )

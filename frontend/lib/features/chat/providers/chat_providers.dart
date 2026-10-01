@@ -15,6 +15,12 @@ class ChatNotifier extends Notifier<List<UIMessage>> {
   @override
   List<UIMessage> build() => [];
 
+  List<UIMessage> _ganti(int indeks, UIMessage pesan) {
+    final salinan = [...state];
+    salinan[indeks] = pesan;
+    return salinan;
+  }
+
   Future<void> sendMessage(String text, {double? lat, double? lon}) async {
     if (ref.read(isLoadingProvider)) return;
 
@@ -24,35 +30,94 @@ class ChatNotifier extends Notifier<List<UIMessage>> {
 
     final requestPayload = [ChatMessage(role: 'user', content: text)];
 
+    // Gelembung bot dipasang langsung dalam mode streaming supaya pengguna
+    // melihat ada aktivitas, lalu isinya bertambah seiring token datang.
+    state = [
+      ...state,
+      UIMessage(text: '', isUser: false, isStreaming: true),
+    ];
+    final int indeksBot = state.length - 1;
+
     try {
       final api = ref.read(apiServiceProvider);
-      final response = await api.sendMessages(
+
+      await for (final kejadian in api.streamMessages(
         messages: requestPayload,
         userLat: lat,
-        userLon: lon
-      );
+        userLon: lon,
+      )) {
+        final String jenis = kejadian['type'] ?? '';
 
-      state = [
-        ...state,
-        UIMessage(
-          text: response.answer, 
-          isUser: false,
-          botData: response,
-        )
-      ];
-      
-      // ref.read(mapProvider.notifier).updateGeoJson(response.geoJson);
-
+        if (jenis == 'meta') {
+          // Peta + skor sudah siap di server: tampilkan sekarang, jangan
+          // tunggu jawaban teks selesai.
+          state = _ganti(
+            indeksBot,
+            state[indeksBot].copyWith(
+              botData: ChatResponse(
+                answer: '',
+                intentType: kejadian['intent_type'] ?? '',
+                placesFound: kejadian['places_found'] ?? 0,
+                documentsFound: kejadian['documents_found'] ?? 0,
+                citations: kejadian['citations'] != null
+                    ? List<Map<String, dynamic>>.from(kejadian['citations'])
+                    : const [],
+                geoJson: kejadian['geo_json'] as Map<String, dynamic>?,
+                hwsdResult: kejadian['hwsd_result'] as Map<String, dynamic>?,
+              ),
+            ),
+          );
+        } else if (jenis == 'token') {
+          state = _ganti(
+            indeksBot,
+            state[indeksBot].copyWith(
+              text: state[indeksBot].text + (kejadian['text'] as String? ?? ''),
+            ),
+          );
+        } else if (jenis == 'done') {
+          // Jawaban utuh dari server dipakai sebagai sumber kebenaran,
+          // supaya tidak ada potongan yang hilang karena masalah jaringan.
+          final akhir = kejadian['answer'] as String?;
+          state = _ganti(
+            indeksBot,
+            state[indeksBot].copyWith(
+              text: (akhir != null && akhir.isNotEmpty)
+                  ? akhir
+                  : state[indeksBot].text,
+              isStreaming: false,
+            ),
+          );
+        } else if (jenis == 'error') {
+          state = _ganti(
+            indeksBot,
+            state[indeksBot].copyWith(
+              text: 'Maaf, terjadi kesalahan: ${kejadian['message']}',
+              isStreaming: false,
+            ),
+          );
+        }
+      }
     } catch (e) {
       if (kDebugMode) {
         print('Chat error: $e');
       }
-      state = [
-        ...state,
-        UIMessage(text: 'Maaf, terjadi kesalahan koneksi', isUser: false)
-      ];
+      state = _ganti(
+        indeksBot,
+        state[indeksBot].copyWith(
+          text: 'Maaf, terjadi kesalahan koneksi',
+          isStreaming: false,
+        ),
+      );
     } finally {
       ref.read(isLoadingProvider.notifier).state = false;
+      // Jaring pengaman: kalau aliran terputus tanpa kejadian 'done',
+      // indikator "menyusun jawaban…" tidak boleh tertinggal selamanya.
+      if (state[indeksBot].isStreaming) {
+        state = _ganti(
+          indeksBot,
+          state[indeksBot].copyWith(isStreaming: false),
+        );
+      }
     }
   }
 }

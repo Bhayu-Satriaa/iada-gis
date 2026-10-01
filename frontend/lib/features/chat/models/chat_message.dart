@@ -54,10 +54,25 @@ class UIMessage{
   final DateTime timestamp;
   final ChatResponse? botData;
 
+  /// True selama jawaban masih mengalir masuk, dipakai untuk menampilkan
+  /// indikator "menyusun jawaban…" di gelembung chat.
+  final bool isStreaming;
+
   UIMessage({
     required this.text,
     required this.isUser,
     DateTime? timestamp,
-    this.botData
+    this.botData,
+    this.isStreaming = false,
   }): timestamp =  timestamp ?? DateTime.now();
+
+  UIMessage copyWith({String? text, ChatResponse? botData, bool? isStreaming}) {
+    return UIMessage(
+      text: text ?? this.text,
+      isUser: isUser,
+      timestamp: timestamp,
+      botData: botData ?? this.botData,
+      isStreaming: isStreaming ?? this.isStreaming,
+    );
+  }
 }

@@ -33,13 +33,17 @@ class RAGPipeline:
         self.spatial_db = db_service
         self.vector_db = chroma_service
     
-    async def process(self, query: str, user_location: Optional[Dict] = None) -> Pipelineresult:
-        """
-        Proses query dari user sampai jadi context untuk LLM
-        
-        Args:
-            query: Pertanyaan user dalam bahasa alami
-            user_location: Lokasi user (opsional), format {"lat": x, "lon": y}
+    async def process(
+        self,
+        query: str,
+        user_location: Optional[Dict] = None,
+        on_event=None,
+    ) -> Pipelineresult:
+        """on_event: callback opsional untuk streaming.
+
+        Kalau diberikan, metadata (peta/skor) dikirim lebih dulu, lalu jawaban
+        dikirim potongan demi potongan. Tanpa callback, perilakunya persis
+        seperti sebelumnya (tunggu jawaban utuh).
         """
         start_time = time.time()
         print(f"\n{'='*60}")
@@ -206,15 +210,40 @@ class RAGPipeline:
         # 6) Context
         context = self._build_context(intent, spatial_results, vector_results, hwsd_result)
 
+        citations = self._extract_citations(vector_results)
+
+        # 6b) Mode streaming: metadata (peta + skor) dikirim lebih dulu supaya
+        # UI bisa langsung menampilkannya tanpa menunggu jawaban selesai.
+        if on_event is not None:
+            await on_event({
+                "type": "meta",
+                "intent_type": intent.type,
+                "places_found": len(spatial_results),
+                "documents_found": len(vector_results),
+                "citations": citations,
+                "geo_json": geo_json,
+                "hwsd_result": hwsd_result,
+            })
+
         # 7) LLM generate
         print(f"\n Generating Answer....")
-        llm_start = time.time() 
-        llm_result = await llm_service.generate_answer(context, query)
+        llm_start = time.time()
+        if on_event is not None:
+            potongan = []
+            async for chunk in llm_service.generate_answer_stream(context, query):
+                potongan.append(chunk)
+                await on_event({"type": "token", "text": chunk})
+            answer = "".join(potongan)
+            llm_result = {
+                "answer": answer,
+                "model": llm_service.model_name,
+                "status": "success",
+            }
+        else:
+            llm_result = await llm_service.generate_answer(context, query)
+            answer = llm_result["answer"]
         llm_ms = int((time.time() - llm_start) * 1000)
-        answer = llm_result["answer"]
         print(f" Answer generate ({len(answer)} chars, {llm_ms}ms)")
-
-        citations = self._extract_citations(vector_results)
         elapsed_ms = int((time.time() - start_time) * 1000)
         
         return Pipelineresult(
