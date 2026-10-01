@@ -21,6 +21,8 @@ class ChatBubble extends ConsumerWidget {
     final hasSpatialData = !isUser && botData?.geoJson != null;
     final hasCitations = !isUser && (botData?.citations.isNotEmpty ?? false);
     final hasHwsdData = !isUser && botData?.hwsdResult != null;
+    final hasDataSources =
+        !isUser && (botData?.dataSources.isNotEmpty ?? false);
 
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
@@ -138,6 +140,13 @@ class ChatBubble extends ConsumerWidget {
                 child: HwsdCard(hwsdResult: botData!.hwsdResult!),
               ),
 
+            // Sumber data — transparansi asal-usul data
+            if (hasDataSources)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+                child: _buildDataSources(context, botData!.dataSources),
+              ),
+
             // Action buttons (lihat peta)
             if (hasSpatialData) _buildActionButtons(context, ref, botData),
           ],
@@ -242,6 +251,102 @@ class ChatBubble extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  /// Blok "Sumber Data" — menunjukkan dari mana data jawaban berasal.
+  ///
+  /// Ditampilkan agar pengguna bisa menilai sendiri seberapa layak data itu
+  /// dipercaya. Hanya sumber yang benar-benar dipakai yang muncul.
+  Widget _buildDataSources(
+    BuildContext context,
+    List<Map<String, dynamic>> sumber,
+  ) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+      decoration: BoxDecoration(
+        color: AppTheme.background,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.source_outlined,
+                size: 14,
+                color: AppTheme.mutedForeground,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'SUMBER DATA',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.5,
+                  color: AppTheme.mutedForeground,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          for (final s in sumber)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    _ikonSumber(s['jenis']),
+                    size: 14,
+                    color: AppTheme.primary,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${s['label'] ?? '-'}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: AppTheme.cardForeground,
+                          ),
+                        ),
+                        if ((s['detail'] ?? '').toString().isNotEmpty)
+                          Text(
+                            '${s['detail']}',
+                            style: TextStyle(
+                              fontSize: 11,
+                              height: 1.35,
+                              color: AppTheme.mutedForeground,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  static IconData _ikonSumber(dynamic jenis) {
+    switch (jenis) {
+      case 'tanah':
+        return Icons.terrain_outlined;
+      case 'kawasan':
+        return Icons.map_outlined;
+      case 'dokumen':
+        return Icons.description_outlined;
+      default:
+        return Icons.info_outline;
+    }
   }
 
   Widget _buildActionButtons(BuildContext context, WidgetRef ref, ChatResponse? botData) {

@@ -7,6 +7,10 @@ class ChatResponse {
   final Map<String, dynamic>? geoJson;
   final Map<String, dynamic>? hwsdResult; // data kesesuaian lahan HWSD
 
+  /// Asal-usul data yang dipakai untuk menjawab (untuk transparansi).
+  /// Tiap entri: {jenis, label, detail}.
+  final List<Map<String, dynamic>> dataSources;
+
   ChatResponse({
     required this.answer,
     required this.intentType,
@@ -15,6 +19,7 @@ class ChatResponse {
     this.citations = const [],
     this.geoJson,
     this.hwsdResult,
+    this.dataSources = const [],
   });
 
   factory ChatResponse.fromJson(Map<String, dynamic> json) {
@@ -28,6 +33,9 @@ class ChatResponse {
           : [],
       geoJson: json['geo_json'] as Map<String, dynamic>?,
       hwsdResult: json['hwsd_result'] as Map<String, dynamic>?,
+      dataSources: json['data_sources'] != null
+          ? List<Map<String, dynamic>>.from(json['data_sources'])
+          : const [],
     );
   }
 }

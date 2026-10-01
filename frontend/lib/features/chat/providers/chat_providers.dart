@@ -64,6 +64,9 @@ class ChatNotifier extends Notifier<List<UIMessage>> {
                     : const [],
                 geoJson: kejadian['geo_json'] as Map<String, dynamic>?,
                 hwsdResult: kejadian['hwsd_result'] as Map<String, dynamic>?,
+                dataSources: kejadian['data_sources'] != null
+                    ? List<Map<String, dynamic>>.from(kejadian['data_sources'])
+                    : const [],
               ),
             ),
           );

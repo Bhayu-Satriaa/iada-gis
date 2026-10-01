@@ -1,6 +1,7 @@
-from typing import List, Dict, Optional
-from dataclasses import dataclass, field
+import json
 import time
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
 
 from app.services.database import db_service
 from app.services.chroma_service import chroma_service
@@ -23,6 +24,7 @@ class Pipelineresult:
     citations: List[Dict] = field(default_factory=list)
     geo_json: Optional[Dict] = None
     hwsd_result: Optional[Dict] = None
+    data_sources: List[Dict] = field(default_factory=list)
 
 class RAGPipeline:
     """Pipeline: Query -> parse -> geocode -> search(spatial + vector) -> context"""
@@ -84,6 +86,9 @@ class RAGPipeline:
 
         # 4) Query Polygon layer GIS — filter sesuai lokasi yang ditanyakan
         geo_json = None
+        # layer_results harus selalu terdefinisi: dipakai untuk geo_json (peta)
+        # DAN untuk ringkasan kawasan di konteks LLM.
+        layer_results: List[Dict] = []
         layer_centroid_lat, layer_centroid_lon = None, None
         preferred_layer_type = self._match_layer_type(intent.location) if intent.location else None
         
@@ -208,9 +213,12 @@ class RAGPipeline:
                 print(f"HWSD scoring error (non-critical): {e}")
 
         # 6) Context
-        context = self._build_context(intent, spatial_results, vector_results, hwsd_result)
+        context = self._build_context(
+            intent, spatial_results, vector_results, hwsd_result, layer_results
+        )
 
         citations = self._extract_citations(vector_results)
+        data_sources = self._data_sources(hwsd_result, layer_results, citations)
 
         # 6b) Mode streaming: metadata (peta + skor) dikirim lebih dulu supaya
         # UI bisa langsung menampilkannya tanpa menunggu jawaban selesai.
@@ -223,6 +231,7 @@ class RAGPipeline:
                 "citations": citations,
                 "geo_json": geo_json,
                 "hwsd_result": hwsd_result,
+                "data_sources": data_sources,
             })
 
         # 7) LLM generate
@@ -259,7 +268,8 @@ class RAGPipeline:
             processing_time_ms=elapsed_ms,
             citations=citations,
             geo_json=geo_json,
-            hwsd_result=hwsd_result
+            hwsd_result=hwsd_result,
+            data_sources=data_sources
         )
 
     def _match_layer_type(self, location: str) -> Optional[str]:
@@ -353,7 +363,111 @@ class RAGPipeline:
 
         return citations
 
-    def _build_context(self, intent: QueryIntent, spatial: List[Dict], vector: List[Dict], hwsd_result: Optional[Dict] = None) -> str:
+    def _data_sources(
+        self,
+        hwsd_result: Optional[Dict],
+        layer_results: List[Dict],
+        citations: List[Dict],
+    ) -> List[Dict]:
+        """Ringkasan asal-usul data supaya pengguna tahu sumbernya.
+
+        Ditampilkan di UI (chat dan peta) untuk transparansi. Hanya sumber yang
+        benar-benar dipakai pada permintaan ini yang dicantumkan — kalau tidak
+        ada data tanah, baris tanah tidak muncul. Sengaja tidak menampilkan
+        apa pun yang tidak bisa dipastikan dari data yang ada.
+        """
+        sumber: List[Dict] = []
+
+        if hwsd_result:
+            soil = hwsd_result.get("soil_info") or {}
+            sumber.append({
+                "jenis": "tanah",
+                "label": "HWSD v2.0 (FAO & IIASA)",
+                "detail": f"resolusi ~1 km · SMU {soil.get('smu_id', '-')}",
+            })
+
+        if layer_results:
+            jenis_layer = layer_results[0].get("layer_type") or "-"
+            sumber.append({
+                "jenis": "kawasan",
+                "label": "Shapefile kawasan pertanian",
+                "detail": f"{len(layer_results)} polygon · {jenis_layer}",
+            })
+
+        if citations:
+            nama = ", ".join(str(c.get("source", "?")) for c in citations[:3])
+            sisa = len(citations) - 3
+            sumber.append({
+                "jenis": "dokumen",
+                "label": "Dokumen pendukung",
+                "detail": f"{len(citations)} berkas: {nama}"
+                          + (f" (+{sisa} lagi)" if sisa > 0 else ""),
+            })
+
+        return sumber
+
+    # Label komoditas untuk ringkasan konteks (kunci sama dengan yang dipakai
+    # enrich_layers_with_soil.py di kolom properties->scores).
+    NAMA_KOMODITAS = {
+        "padi": "Padi Sawah",
+        "jagung": "Jagung",
+        "kedelai": "Kedelai",
+        "kelapa_sawit": "Kelapa Sawit",
+    }
+
+    @staticmethod
+    def _properti(layer: Dict) -> Dict:
+        """Ambil kolom properties dengan aman (jsonb bisa datang sebagai str)."""
+        p = layer.get("properties")
+        if isinstance(p, dict):
+            return p
+        if isinstance(p, str):
+            try:
+                hasil = json.loads(p)
+                return hasil if isinstance(hasil, dict) else {}
+            except (ValueError, TypeError):
+                return {}
+        return {}
+
+    def _sebaran_kelas(self, layers: List[Dict]) -> List[str]:
+        """Jumlah kawasan per kelas kesesuaian, untuk tiap komoditas.
+
+        Tujuannya menyelaraskan jawaban teks dengan warna polygon di peta:
+        sebelumnya LLM menjawab "data spasial belum tersedia" sementara di
+        layar ada ratusan polygon berwarna.
+        """
+        from collections import Counter
+
+        hitung = {k: Counter() for k in self.NAMA_KOMODITAS}
+        for layer in layers:
+            skor = self._properti(layer).get("scores") or {}
+            if not isinstance(skor, dict):
+                continue
+            for kunci in self.NAMA_KOMODITAS:
+                kelas = skor.get(kunci)
+                if kelas:
+                    hitung[kunci][kelas] += 1
+
+        hasil = ["Sebaran kelas kesesuaian (jumlah kawasan):"]
+        for kunci, label in self.NAMA_KOMODITAS.items():
+            c = hitung[kunci]
+            if not c:
+                continue
+            rincian = "  ".join(
+                f"{c[k]} {k}" for k in ("S1", "S2", "S3", "N") if c.get(k)
+            )
+            hasil.append(f"  {label}: {rincian}")
+        return hasil
+
+    def _build_context(
+        self,
+        intent: QueryIntent,
+        spatial: List[Dict],
+        vector: List[Dict],
+        hwsd_result: Optional[Dict] = None,
+        layer_results: Optional[List[Dict]] = None,
+    ) -> str:
+        layers = layer_results or []
         lines = []
         lines.append("=" * 50)
         lines.append(f"Query: {intent.raw_query}")
@@ -361,7 +475,11 @@ class RAGPipeline:
 
         if intent.location:
             lines.append(f"Location: {intent.location}")
-            lines.append(f"Radius: {intent.radius_km} km")
+            # Radius hanya bermakna untuk pencarian titik. Untuk query tingkat
+            # kabupaten/kota, menyebut "radius 15 km" menyesatkan LLM sehingga
+            # jawabannya bilang data tidak tersedia padahal kawasan ada.
+            if not layers:
+                lines.append(f"Radius: {intent.radius_km} km")
 
         keywords_str = ", ".join([str(k) for k in intent.keywords]) if intent.keywords else "None"
         lines.append(f"Keywords: {keywords_str}")
@@ -371,6 +489,18 @@ class RAGPipeline:
             name = p.get('name', 'Unknown')
             dist = p.get('distance_meters', 0)
             lines.append(f"- {name} ({dist:.0f}m)")
+
+        # Ringkasan kawasan dari layer GIS. Tanpa ini LLM tidak tahu ada
+        # kawasan di peta, sehingga jawabannya berbunyi "data spasial belum
+        # tersedia" padahal di layar terlihat ratusan polygon berwarna.
+        if layers:
+            lines.append("")
+            lines.append(f"-- Kawasan Pertanian terdeteksi: {len(layers)} kawasan --")
+            # Nama kawasan di database berupa penanda mesin
+            # ("kawasan_pertanian_kutai_timur_125"), bukan nama tempat asli.
+            # Sengaja tidak dikirim: LLM bisa salah menganggapnya nama lokasi.
+            for baris in self._sebaran_kelas(layers):
+                lines.append(baris)
 
         lines.append(f"\n--- Documents ({len(vector)} results) ---")
         for d in vector:

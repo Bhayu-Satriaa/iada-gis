@@ -144,6 +144,41 @@ class MapLegendCard extends StatelessWidget {
             ),
           ] else
             const SizedBox(height: 8),
+
+          // Asal-usul data. Ditampilkan agar pengguna tahu dari mana angka di
+          // peta berasal dan bisa menilai sendiri kelayakannya.
+          Container(
+            margin: const EdgeInsets.only(top: 10),
+            padding: const EdgeInsets.only(top: 8),
+            decoration: BoxDecoration(
+              border: Border(
+                top: BorderSide(color: AppTheme.border, width: 1),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Text(
+                  'SUMBER DATA',
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.5,
+                    color: AppTheme.mutedForeground,
+                  ),
+                ),
+                SizedBox(height: 4),
+                _BarisSumber(
+                  label: 'Kawasan',
+                  detail: 'Shapefile kawasan pertanian per wilayah',
+                ),
+                _BarisSumber(
+                  label: 'Data tanah',
+                  detail: 'HWSD v2.0 (FAO & IIASA), resolusi ~1 km',
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -190,6 +225,37 @@ class MapLegendCard extends StatelessWidget {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// Satu baris asal-usul data di kaki kartu legend.
+class _BarisSumber extends StatelessWidget {
+  const _BarisSumber({required this.label, required this.detail});
+
+  final String label;
+  final String detail;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: Text.rich(
+        TextSpan(
+          style: TextStyle(
+            fontSize: 9,
+            height: 1.35,
+            color: AppTheme.mutedForeground,
+          ),
+          children: [
+            TextSpan(
+              text: '$label: ',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            TextSpan(text: detail),
+          ],
+        ),
       ),
     );
   }

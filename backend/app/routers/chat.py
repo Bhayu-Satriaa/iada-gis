@@ -27,6 +27,8 @@ class ChatResponse(BaseModel):
     citations: List[dict] = []
     geo_json: Optional[Dict] = None
     hwsd_result: Optional[Dict] = None  # null jika tidak ada data HWSD
+    # Asal-usul data yang dipakai, untuk transparansi di UI.
+    data_sources: List[dict] = []
 
 @router.post("/chat")
 async def chat(request: ChatRequest):
@@ -53,6 +55,7 @@ async def chat(request: ChatRequest):
         citations=result.citations,
         geo_json=result.geo_json,
         hwsd_result=result.hwsd_result,
+        data_sources=result.data_sources,
     )
 
 
